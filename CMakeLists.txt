@@ -4,12 +4,18 @@ project(panda_robot)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
+set(moveit_commander_DIR "/home/liu/ws_moveit/build")
+set(moveit_msgs_DIR "/home/liu/ws_moveit/build")
 find_package(catkin REQUIRED COMPONENTS
   roscpp
   rospy
   std_msgs
   franka_interface
   franka_core_msgs
+  geometry_msgs
+  franka_gripper
+  moveit_commander
+  moveit_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -19,6 +25,7 @@ catkin_package()
 catkin_python_setup()
 catkin_install_python(PROGRAMS src/panda_robot/panda_robot.py 
                                demos/demo_endeffector_keyboard.py
+                               tests/test_pos_controllers.py
                       DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 
