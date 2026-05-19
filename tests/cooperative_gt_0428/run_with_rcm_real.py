@@ -15,7 +15,7 @@
 
 用法:
   Terminal 1: roslaunch panda_simulator simulation.launch
-  Terminal 2: python run_with_rcm.py --strategy all --trials 3 --use-virtual-env
+  Terminal 2: python run_with_rcm_real.py --strategy all --trials 3
 """
 import argparse
 import os
@@ -32,7 +32,8 @@ from src.alpha_scheduler_gt import (
     FixedAlphaScheduler
 )
 from src.env_estimator import EnvironmentEstimator
-from src.utils import VirtualStiffnessSurface, ForceSensorInput, DataLogger
+from src.utils import VirtualStiffnessSurface, DataLogger
+from src.force_sensor_direct import DirectForceSensorInput
 from src.leaky_integrator import LeakyIntegrator
 from src.robot_interface import (
     update_robot_state, safe_move_to_joint_position,
@@ -92,7 +93,7 @@ def read_contact_force(force_sensor, venv, x, delta, delta_dot):
     """
     获取当前接触力。
 
-    优先使用新鲜的六维力传感器数据；若传感器未启动、话题无数据或超时，
+    优先使用新鲜的六维力传感器数据；若传感器未启动、串口无数据或超时，
     回退到原 Kelvin-Voigt 虚拟刚度环境。
     """
     if force_sensor is not None and force_sensor.available():
@@ -351,19 +352,25 @@ def main():
     ap.add_argument('--trials', type=int, default=1)
     ap.add_argument('--output-dir', default='results')
     ap.add_argument('--gains-file', default=None)
-    ap.add_argument('--force-topic', default='/force_sensor/wrench')
+    ap.add_argument('--force-port', default='/dev/ttyUSB0')
+    ap.add_argument('--force-baudrate', type=int, default=460800)
+    ap.add_argument('--force-serial-timeout', type=float, default=0.05)
     ap.add_argument('--force-timeout', type=float, default=0.02,
-                    help='force topic freshness window; 0.02s matches a 1kHz publisher with margin')
+                    help='direct sensor freshness window; 0.02s matches 1kHz streaming with margin')
     ap.add_argument('--force-axis', type=int, default=2)
     ap.add_argument('--force-sign', type=float, default=1.0)
     ap.add_argument('--force-wait-timeout', type=float, default=2.0)
     ap.add_argument('--force-expected-rate', type=float, default=1000.0)
-    ap.add_argument('--force-node-command-format', default='both')
-    ap.add_argument('--force-node-data-source', default='0x33')
-    ap.add_argument('--force-node-streaming', dest='force_node_streaming',
+    ap.add_argument('--force-command-format', default='both',
+                    choices=('manual', 'vendor', 'both'))
+    ap.add_argument('--force-data-source', default='0x33')
+    ap.add_argument('--force-streaming', dest='force_streaming',
                     action='store_true', default=True)
-    ap.add_argument('--no-force-node-streaming', dest='force_node_streaming',
+    ap.add_argument('--no-force-streaming', dest='force_streaming',
                     action='store_false')
+    ap.add_argument('--force-poll-hz', type=float, default=100.0)
+    ap.add_argument('--force-output-units', default='N', choices=('N', 'kgf'))
+    ap.add_argument('--force-tare-on-start', action='store_true')
     ap.add_argument('--no-force-sensor', action='store_true')
     args = ap.parse_args()
 
@@ -403,19 +410,30 @@ def main():
     venv = VirtualStiffnessSurface(cfg.stiffness_zones)
     force_sensor = None
     if not args.no_force_sensor:
-        force_sensor = ForceSensorInput(
-            topic=args.force_topic,
-            timeout=args.force_timeout,
+        data_source = int(args.force_data_source, 0)
+        force_sensor = DirectForceSensorInput(
+            port=args.force_port,
+            baudrate=args.force_baudrate,
+            serial_timeout=args.force_serial_timeout,
+            freshness_timeout=args.force_timeout,
             force_axis=args.force_axis,
             force_sign=args.force_sign,
+            command_format=args.force_command_format,
+            data_source_cmd=data_source,
+            use_streaming=args.force_streaming,
+            output_units=args.force_output_units,
+            tare_on_start=args.force_tare_on_start,
+            poll_hz=args.force_poll_hz,
         )
+        rospy.on_shutdown(force_sensor.close)
         got_first_frame = force_sensor.wait_for_data(args.force_wait_timeout)
         rospy.loginfo(
-            f"Force sensor topic: {args.force_topic}, "
+            f"Direct force sensor: {args.force_port} @ {args.force_baudrate}, "
             f"axis={args.force_axis}, sign={args.force_sign}, "
             f"timeout={args.force_timeout}s; expected_rate={args.force_expected_rate:g}Hz; "
-            f"node_format={args.force_node_command_format}, "
-            f"data_source={args.force_node_data_source}, streaming={args.force_node_streaming}; "
+            f"command_format={args.force_command_format}, "
+            f"data_source=0x{data_source:02X}, streaming={args.force_streaming}, "
+            f"detected_format={force_sensor.detected_format}; "
             f"first_frame={got_first_frame}, seq={force_sensor.seq()}, "
             f"age={force_sensor.age():.4f}s; virtual env fallback enabled"
         )
@@ -442,6 +460,9 @@ def main():
             )
             if ok:
                 lg.save(os.path.join(odir, f"{s.name}_t{t:02d}.npz"))
+
+    if force_sensor is not None:
+        force_sensor.close()
 
     rospy.loginfo(f"\nResults → {odir}")
 
