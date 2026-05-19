@@ -43,17 +43,17 @@ class Config:
     scan_start_x = 0.40
     scan_end_x   = 0.65
     scan_y       = 0.0
-    scan_z       = 0.10
-    approach_z   = 0.20
+    scan_z       = 0.20
+    approach_z   = 0.30
     scan_vx      = 0.01
-    F_desired    = 2.0
+    F_desired    = 1.0
     force_axis   = 2
 
     stiffness_zones = [
-        (0.40, 0.47, 500,  5),
-        (0.47, 0.54, 5000, 50),
-        (0.54, 0.61, 80,   2),
-        (0.61, 0.68, 500,  5),
+    (0.25, 0.29, 500,  5),    # 软
+    (0.29, 0.33, 1000,  10),   # 硬
+    (0.33, 0.37, 200,  2),    # 极软
+    (0.37, 0.41, 500,  5),    # 软
     ]
 
     ctrl_rate = 100
@@ -197,9 +197,35 @@ def run_trial(robot, kin_tool, kin_flange,
         robot.exec_torque_cmd(tau)
         x_cur += cfg.scan_vx * dt
 
+        pos_tool = tp.copy()
+        pos_tool_des = x_ref.copy()
+        pos_err = pos_tool - pos_tool_des
+        pos_err_norm = np.linalg.norm(pos_err)
+        F_actual = abs(F_z)
+        F_desired = cfg.F_desired
+        F_err = F_actual - F_desired
+
+        if logger.count % 10 == 0:
+            rospy.loginfo(
+                f"  t={t:5.2f}s | "
+                f"tool=[{pos_tool[0]*1000:6.2f},{pos_tool[1]*1000:6.2f},{pos_tool[2]*1000:6.2f}]mm | "
+                f"des=[{pos_tool_des[0]*1000:6.2f},{pos_tool_des[1]*1000:6.2f},{pos_tool_des[2]*1000:6.2f}]mm | "
+                f"err={pos_err_norm*1000:5.2f}mm | "
+                f"F={F_actual:.3f}N (des={F_desired:.3f}, err={F_err:+.3f}) | "
+                f"K={K_hat:7.1f} B={B_hat:5.2f} | "
+                f"e_f={e_f_scalar:+.3f} e_r={e_r_scalar*1000:5.2f}mm | "
+                f"alpha={alpha:.2f} phase={phase_val}"
+            )
+
         logger.log(
-            t=t, pos=tp,
-            F_measured=F_z, F_desired=cfg.F_desired,
+            t=t, pos=pos_tool,
+            pos_des=pos_tool_des,
+            pos_err=pos_err,
+            F_measured=F_actual, F_desired=F_desired,
+            F_err=F_err,
+            wrench=np.zeros(6),
+            force_source='virtual' if venv else 'none',
+            sensor_available=0,
             e_f=e_f_scalar, e_r=e_r_scalar,
             sigma_f_norm=np.linalg.norm(sigma_f),
             e_r1_norm=np.linalg.norm(e_r1),
