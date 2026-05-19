@@ -13,6 +13,7 @@
   Figure 6 — 综合面板 (单图概览)
 
 用法:
+  python plot_results.py                         # 默认处理 results/ 下最近更新的数据目录
   python plot_results.py results/rcm_20260428_103045/coop_fuzzy_t00.npz
   python plot_results.py results/rcm_20260428_103045/   # 处理目录下所有 .npz
 """
@@ -54,8 +55,99 @@ def load_npz(path):
     """加载单个 .npz 文件, 返回 dict"""
     data = dict(np.load(path, allow_pickle=True))
     # numpy 数组转一维
-    return {k: np.atleast_1d(v).flatten() if v.ndim > 0 else np.array([v])
-            for k, v in data.items()}
+    d = {k: np.atleast_1d(v).flatten() if v.ndim > 0 else np.array([v])
+         for k, v in data.items()}
+    return add_derived_fields(d)
+
+
+def _fit_length(value, n, fill=0.0):
+    """将标量/短数组扩展到长度 n，便于兼容旧日志字段。"""
+    arr = np.asarray(value, dtype=float).flatten()
+    if len(arr) == n:
+        return arr
+    if len(arr) == 0:
+        return np.full(n, fill, dtype=float)
+    if len(arr) == 1:
+        return np.full(n, arr[0], dtype=float)
+    out = np.full(n, fill, dtype=float)
+    m = min(n, len(arr))
+    out[:m] = arr[:m]
+    if m < n:
+        out[m:] = arr[m - 1]
+    return out
+
+
+def add_derived_fields(d):
+    """
+    补齐新版绘图需要的字段。
+
+    旧版 run_no_rcm_test 只记录 pos_x/y/z、F_measured/F_desired、
+    x_desired、error_track/e_r1_norm 等字段，没有 pos_des、pos_err、
+    F_err。这里统一派生，避免绘图脚本和数据版本强耦合。
+    """
+    if 't' not in d:
+        return d
+
+    n = len(d['t'])
+    if n == 0:
+        return d
+
+    for key in ('pos_x', 'pos_y', 'pos_z'):
+        if key in d:
+            d[key] = _fit_length(d[key], n)
+
+    if 'F_err' not in d and 'F_measured' in d and 'F_desired' in d:
+        d['F_measured'] = _fit_length(d['F_measured'], n)
+        d['F_desired'] = _fit_length(d['F_desired'], n)
+        d['F_err'] = d['F_measured'] - d['F_desired']
+
+    # 期望位置: 新日志优先；旧日志用 x_desired 补 x，y 默认 0，
+    # z 无法从旧日志严格恢复时以当前 z 占位，保持图表可生成。
+    if 'pos_des_x' not in d:
+        if 'x_desired' in d:
+            d['pos_des_x'] = _fit_length(d['x_desired'], n)
+        elif 'pos_err_x' in d and 'pos_x' in d:
+            d['pos_des_x'] = d['pos_x'] - _fit_length(d['pos_err_x'], n)
+        elif 'pos_x' in d:
+            d['pos_des_x'] = d['pos_x'].copy()
+
+    if 'pos_des_y' not in d:
+        if 'pos_err_y' in d and 'pos_y' in d:
+            d['pos_des_y'] = d['pos_y'] - _fit_length(d['pos_err_y'], n)
+        else:
+            d['pos_des_y'] = np.zeros(n)
+
+    if 'pos_des_z' not in d:
+        if 'pos_err_z' in d and 'pos_z' in d:
+            d['pos_des_z'] = d['pos_z'] - _fit_length(d['pos_err_z'], n)
+        elif 'pos_z' in d:
+            d['pos_des_z'] = d['pos_z'].copy()
+
+    for axis in ('x', 'y', 'z'):
+        pos_key = f'pos_{axis}'
+        des_key = f'pos_des_{axis}'
+        err_key = f'pos_err_{axis}'
+        if err_key not in d and pos_key in d and des_key in d:
+            d[err_key] = _fit_length(d[pos_key], n) - _fit_length(d[des_key], n)
+
+    if 'pos_err_norm' not in d:
+        if all(k in d for k in ('pos_err_x', 'pos_err_y', 'pos_err_z')):
+            d['pos_err_norm'] = np.sqrt(
+                d['pos_err_x'] ** 2 + d['pos_err_y'] ** 2 + d['pos_err_z'] ** 2
+            )
+        elif 'error_track' in d:
+            d['pos_err_norm'] = _fit_length(d['error_track'], n)
+        elif 'e_r1_norm' in d:
+            d['pos_err_norm'] = _fit_length(d['e_r1_norm'], n)
+        elif 'e_r' in d:
+            d['pos_err_norm'] = np.abs(_fit_length(d['e_r'], n))
+        else:
+            d['pos_err_norm'] = np.zeros(n)
+
+    if 'error_rcm' not in d:
+        d['error_rcm'] = np.zeros(n)
+
+    return d
 
 
 def collect_files(input_path):
@@ -67,6 +159,20 @@ def collect_files(input_path):
         return [p]
     else:
         raise FileNotFoundError(input_path)
+
+
+def find_latest_result_input(results_root):
+    """返回 results_root 下最近更新的 .npz 所在目录。"""
+    root = Path(results_root)
+    if not root.exists():
+        raise FileNotFoundError(results_root)
+
+    npz_files = [p for p in root.rglob('*.npz') if p.is_file()]
+    if not npz_files:
+        raise FileNotFoundError(f"{results_root} 下没有 .npz 文件")
+
+    latest_file = max(npz_files, key=lambda p: p.stat().st_mtime)
+    return latest_file.parent, latest_file
 
 
 # ================================================================
@@ -376,19 +482,31 @@ def print_summary(d, name):
 # ================================================================
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('input', help='.npz 文件或包含 .npz 的目录')
+    ap.add_argument('input', nargs='?', default=None,
+                    help='.npz 文件或包含 .npz 的目录；未指定时自动选择最新结果目录')
+    ap.add_argument('--results-root', default='results',
+                    help='自动选择最新数据时搜索的根目录 (默认: results)')
     ap.add_argument('--out-dir', default=None,
                     help='图片输出目录 (默认: 输入文件同目录/figures/)')
-    ap.add_argument('--show', action='store_true', help='显示图片 (默认仅保存)')
+    ap.add_argument('--no-show', action='store_true',
+                    help='仅保存图片，不显示图窗')
     args = ap.parse_args()
 
-    files = collect_files(args.input)
+    input_path = args.input
+    latest_file = None
+    if input_path is None:
+        input_path, latest_file = find_latest_result_input(args.results_root)
+        print(f"未指定输入，自动选择最近更新数据目录: {input_path}")
+        print(f"最近更新文件: {latest_file}")
+
+    files = collect_files(input_path)
     if not files:
-        print(f"未找到 .npz 文件: {args.input}")
+        print(f"未找到 .npz 文件: {input_path}")
         sys.exit(1)
 
     if args.out_dir is None:
-        base = Path(args.input).parent if Path(args.input).is_file() else Path(args.input)
+        input_path_obj = Path(input_path)
+        base = input_path_obj.parent if input_path_obj.is_file() else input_path_obj
         args.out_dir = str(base / 'figures')
     os.makedirs(args.out_dir, exist_ok=True)
 
@@ -413,12 +531,12 @@ def main():
                 out_path = os.path.join(args.out_dir, f'{name}_{tag}.png')
                 fig.savefig(out_path, dpi=120, bbox_inches='tight')
                 print(f'  ✓ {tag} → {out_path}')
-                if not args.show:
+                if args.no_show:
                     plt.close(fig)
             except Exception as e:
                 print(f'  ✗ {tag} 失败: {e}')
 
-        if args.show:
+        if not args.no_show:
             plt.show()
 
     print(f"\n所有图保存到: {args.out_dir}")
