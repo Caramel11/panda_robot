@@ -256,8 +256,8 @@ STRATEGIES = {
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--strategy', default='all')
-    ap.add_argument('--trials', type=int, default=3)
+    ap.add_argument('--strategy', default='coop_fuzzy')
+    ap.add_argument('--trials', type=int, default=1)
     ap.add_argument('--use-virtual-env', action='store_true')
     ap.add_argument('--output-dir', default='results')
     ap.add_argument('--gains-file', default=None)
