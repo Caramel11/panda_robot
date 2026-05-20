@@ -45,12 +45,12 @@ from src.robot_interface import (
 # ================================================================
 class Config:
     # 扫描轨迹 (tool tip)
-    scan_start_x = 0.25
-    scan_end_x   = 0.40
+    scan_start_x = 0.23
+    scan_end_x   = 0.32
     scan_y       = 0.0
     scan_z       = 0.007
     approach_z   = 0.05
-    scan_vx      = 0.005
+    scan_vx      = 0.002
 
     # 力控
     F_desired    = 0.5
@@ -71,10 +71,8 @@ class Config:
     # ]
 
     stiffness_zones = [
-    (0.25, 0.29, 500,  5),    # 软
-    (0.29, 0.33, 1000,  10),   # 硬
-    (0.33, 0.37, 200,  2),    # 极软
-    (0.37, 0.41, 500,  5),    # 软
+        (0.23, 0.275, 250, 4),    # 低刚度
+        (0.275, 0.32, 500, 8),    # 高刚度
     ]
 
     # 控制频率 (文档要求 1kHz; 仿真可用 100Hz)
@@ -311,6 +309,7 @@ def run_trial(robot, kin_tool, kin_flange,
             K_eff=K_eff,
             x_desired=x_cur,
             error_rcm=rcm_err, error_track=error[1],
+            arbitration_strategy=sched.name,
             u_norm=np.linalg.norm(tau),
             phase=phase_val,
         )
