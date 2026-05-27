@@ -1,5 +1,9 @@
 """
-通用工具: 虚拟接触环境, 力传感器输入, 数据记录
+通用工具: 虚拟接触环境、力传感器输入、滤波限幅和数据记录。
+
+当前 no-RCM 推荐命令默认使用 VirtualStiffnessSurface 生成接触力；
+ForceSensorInput 保留为传感器接入的兼容工具；DataLogger 负责把每个控制周期
+的关键物理量保存为 npz，便于离线画图和统计指标。
 """
 import numpy as np
 import rospy
@@ -10,6 +14,12 @@ class VirtualStiffnessSurface:
     """
     分段 Kelvin-Voigt 虚拟接触面
     zones: [(x_start, x_end, K_e, B_e), ...]
+
+    力模型:
+      F = K_e(x) * delta + B_e(x) * delta_dot
+
+    其中 K_e/B_e 可随 x 分段变化，transition_width 用于在相邻刚度区间边界
+    做平滑过渡，避免扫描跨区时力突变。
     """
 
     def __init__(self, zones, transition_width=0.02):
@@ -32,6 +42,7 @@ class VirtualStiffnessSurface:
         return K, B
 
     def get_stiffness(self, x):
+        """根据当前 x 位置返回插值后的 (K_e, B_e)。"""
         if x < self.zones[0][0]:
             return self.zones[0][2], self.zones[0][3]
         for idx, (x0, x1, K, B) in enumerate(self.zones):
@@ -48,7 +59,10 @@ class VirtualStiffnessSurface:
         return self.zones[-1][2], self.zones[-1][3]
 
     def compute_force(self, x, delta, delta_dot):
-        """单向接触: δ ≤ 0 时无力"""
+        """根据 Kelvin-Voigt 模型计算单向接触力。
+
+        delta <= 0 表示未压入表面，此时接触力为 0；只有压入表面时才输出正力。
+        """
         if delta <= 0:
             return 0.0
         K, B = self.get_stiffness(x)
@@ -99,6 +113,7 @@ class ForceSensorInput:
         self._seq += 1
 
     def available(self):
+        """判断最近一次传感器消息是否仍在 timeout 时间窗内。"""
         if self._stamp is None:
             return False
         age = (rospy.Time.now() - self._stamp).to_sec()
@@ -177,7 +192,11 @@ class VectorRateLimiter:
 
 
 class DataLogger:
-    """时序数据记录器"""
+    """时序数据记录器。
+
+    log(...) 接收 run_no_rcm 中的命名字段，并拆分向量字段为标量数组；
+    save(...) 统一保存为 npz。字段命名尽量兼容旧实验脚本，便于复用画图代码。
+    """
 
     def __init__(self):
         self._d = {
@@ -210,6 +229,10 @@ class DataLogger:
         }
 
     def log(self, **kw):
+        """记录一个控制周期的数据。
+
+        未出现在 self._d 中的字段会被忽略，避免调用端新增临时字段时破坏保存。
+        """
         for k, v in kw.items():
             if k == 'pos':
                 self._d['pos_x'].append(v[0])

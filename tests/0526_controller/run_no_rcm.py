@@ -5,7 +5,13 @@
 =============================================
 
 控制链路:
-  泄漏积分更新 → 4D-ARE 查表 → u_tool 直接作为笛卡尔力 → J_tool^T → τ
+  1. 读取 tool 端位姿/速度
+  2. 虚拟 Kelvin-Voigt 环境生成接触力
+  3. RLS 在线估计环境刚度 K_hat 与阻尼 B_hat
+  4. alpha 调度器根据力误差/边界风险输出仲裁参数
+  5. CooperativeGameController 查表得到 K_eff
+  6. u_tool 直接作为 tool 端笛卡尔力
+  7. τ = J_tool^T u_tool + 姿态保持力矩
 
 与 RCM 模式的区别:
   - 使用 panda_link11 的 Jacobian (不是 flange)
@@ -15,7 +21,7 @@
 
 用法:
   Terminal 1: roslaunch panda_simulator simulation.launch
-  Terminal 2: python run_no_rcm.py
+  Terminal 2: python run_no_rcm.py --strategy online_priority --controller-mode pareto_iter
 """
 import argparse
 import os
@@ -30,6 +36,7 @@ from src.gt_controller import CooperativeGameController
 from src.alpha_scheduler_gt import (
     PhaseAwareFuzzyAlphaScheduler, ForceMarginFuzzyAlphaScheduler,
     ContinuousForceMarginFuzzyAlphaScheduler,
+    OnlinePriorityAdaptationAlphaScheduler,
     FixedAlphaScheduler
 )
 from src.env_estimator import EnvironmentEstimator
@@ -42,26 +49,39 @@ from src.robot_interface import (
 
 
 class Config:
+    """实验全局参数。
+
+    当前版本以 Gazebo + 虚拟 Kelvin-Voigt 接触环境为主，所有几何参数、
+    力目标、安全边界、控制频率和接触稳定判据都集中放在这里，便于复现实验。
+    """
+
+    # 扫描轨迹: tool 端沿 x 方向匀速从 scan_start_x 运动到 scan_end_x。
     scan_start_x = 0.40
     scan_end_x   = 0.48
     scan_y       = 0.0
     scan_z       = 0.298
+    # approach_z 是虚拟表面高度；tool 低于该高度时产生压入量。
     approach_z   = 0.30
     scan_vx      = 0.002
+
+    # 力目标与安全边界，供 online_priority 等 alpha 调度器使用。
     F_desired    = 1.0
     F_min        = 0.3
     F_max        = 2.0
     force_axis   = 2
 
+    # 分段环境参数: (x_start, x_end, K_e, B_e)。
     stiffness_zones = [
     (0.40, 0.44, 300, 5),    # 低刚度
     (0.44, 0.48, 500, 8),    # 高刚度
     ]
 
+    # 控制周期与泄漏积分器参数。
     ctrl_rate = 100
     dt = 1.0 / ctrl_rate
     eps_r = 1.0
     eps_f = 2.0
+    # 接触检测和接触稳定窗口参数。
     settle_time = 2.0
     contact_force_threshold = 0.3
     contact_z_tolerance = 0.001
@@ -73,18 +93,33 @@ class Config:
 
 
 def contact_delta_from_surface(cfg, z):
-    """以 approach_z 作为真实/虚拟表面高度，低于表面即产生压入量。"""
+    """以 approach_z 作为虚拟表面高度，计算单向压入量 δ。
+
+    z >= approach_z 表示未接触，返回 0；z < approach_z 表示压入表面，
+    返回 approach_z - z。该函数是虚拟环境力计算的唯一压入量来源。
+    """
     return max(0.0, cfg.approach_z - z)
 
 
 def run_trial(robot, kin_tool, kin_flange,
               cfg, ctrl, sched, est, venv, logger, trial_id):
+    """运行一次完整 no-RCM 试验。
+
+    Phase 1: 位置主导接近表面；
+    Phase 2: 使用在线 alpha 和力位控制器扫描；
+    Phase 3: 设置 retreat 状态并回到初始关节角。
+
+    `ctrl.compute_control(...)` 的接口在 ARE 和 Pareto 迭代模式下完全相同，
+    因此这里不需要感知具体控制器内部求解方法。
+    """
     rate = rospy.Rate(cfg.ctrl_rate)
     dt = cfg.dt
 
+    # σ_f 是力误差泄漏积分状态；integ_euler 是姿态 PD+I 的积分项。
     sigma_f_int = LeakyIntegrator(eps=cfg.eps_f, dt=dt, dim=3)
     integ_euler = np.zeros(3)
 
+    # 保存上一控制周期的物理量，用于计算变化率输入。
     prev_ef = 0.0; prev_er = 0.0; prev_K = 500.0
 
     est.reset()
@@ -101,6 +136,8 @@ def run_trial(robot, kin_tool, kin_flange,
                   f"euler: {ref_euler_fixed}")
 
     # ---- Phase 1: 接近 ----
+    # 接近阶段固定 alpha=1.0，以位置控制为主；力误差置零，避免未接触时
+    # 因力目标造成不必要的下压命令。
     rospy.loginfo("  Phase 1: Approaching...")
     z_contact = None
     t0 = rospy.Time.now().to_sec()
@@ -132,6 +169,7 @@ def run_trial(robot, kin_tool, kin_flange,
         tp = rs["tool_position"]
         tv = rs["tool_position_velocity"]
 
+        # 当前版本默认使用虚拟接触环境。未接触时 F_z=0。
         F_z = 0.0
         if venv:
             F_z = venv.compute_force(
@@ -151,6 +189,7 @@ def run_trial(robot, kin_tool, kin_flange,
         dt_approach = min(max(dt_approach, dt), 0.1)
         last_approach_time = now
 
+        # 期望 z 缓慢下降；一旦触碰表面，不再让参考点继续穿过扫描高度。
         z_ref_approach -= approach_speed * dt_approach
         if surface_touched:
             z_ref_approach = max(z_ref_approach, contact_z_threshold)
@@ -162,11 +201,13 @@ def run_trial(robot, kin_tool, kin_flange,
             xy_ref_approach[1],
             z_ref_approach,
         ])
+        # 接近阶段只构造位置/速度误差；e_f 和 σ_f 均不参与控制。
         e_r1 = tp - x_ref_p1
         e_r2 = tv - xdot_ref
         e_f = np.zeros(3)
         sigma_f = sigma_f_int.get()
 
+        # 仍走统一的 no-RCM 力矩装配函数，保持接口和扫描阶段一致。
         tau, _, _, integ_euler, _ = compute_torque_no_rcm(
             ctrl, rs, kin_tool,
             e_r1, e_r2, e_f, sigma_f,
@@ -188,6 +229,8 @@ def run_trial(robot, kin_tool, kin_flange,
 
         at_contact_height = tp[2] <= contact_z_threshold + cfg.contact_z_tolerance
         if surface_touched and at_contact_height:
+            # 接触稳定判定: 到达接触高度后，统计滑动窗口内的力波动、
+            # z 位置波动和力变化斜率，三者都足够小才进入扫描阶段。
             if settle_start is None:
                 settle_start = rospy.Time.now().to_sec()
                 settle_forces = []
@@ -256,6 +299,8 @@ def run_trial(robot, kin_tool, kin_flange,
     )
 
     # ---- Phase 2: 恒力扫描 ----
+    # 扫描阶段 x 方向按 scan_vx 匀速推进，z 方向由力位控制器自动调节，
+    # 目标是在跟踪扫描路径的同时把接触反力维持在 F_desired 附近。
     rospy.loginfo("  Phase 2: Scanning...")
     x_cur = cfg.scan_start_x
     t_scan = time.time()
@@ -266,6 +311,7 @@ def run_trial(robot, kin_tool, kin_flange,
         tp = rs["tool_position"]
         tv = rs["tool_position_velocity"]
 
+        # 计算当前虚拟接触力，并用同一压入量送入环境估计器。
         F_z = 0.0
         if venv:
             F_z = venv.compute_force(
@@ -278,6 +324,7 @@ def run_trial(robot, kin_tool, kin_flange,
             -tv[2],
         )
 
+        # 当前期望 tool 位姿: x 随时间增长，y/z 固定。
         x_ref = np.array([x_cur, cfg.scan_y, cfg.scan_z])
         xdot_ref = np.array([cfg.scan_vx, 0, 0])
 
@@ -285,9 +332,15 @@ def run_trial(robot, kin_tool, kin_flange,
         F_des = np.array([0.0, 0.0, cfg.F_desired])
         F_meas = np.array([0.0, 0.0, abs(F_z)])
 
+        # 控制器状态量:
+        # e_r1/e_r2 是位置和速度误差；e_f_vec 是三轴力误差。
+        # z 轴力误差符号采用 F_meas - F_des，与论文风险指标一致。
         e_r1 = tp - x_ref
         e_r2 = tv - xdot_ref
         e_f_vec = F_meas - F_des
+
+        # 刚进入扫描的前 contact_force_blend_time 秒内渐进引入力控制，
+        # 防止接触瞬间的力误差直接造成控制力突变。
         force_blend = min(1.0, max(0.0, t / cfg.contact_force_blend_time))
         e_f_vec_ctrl = force_blend * e_f_vec
         sigma_f = sigma_f_int.update(e_f_vec_ctrl)
@@ -300,6 +353,8 @@ def run_trial(robot, kin_tool, kin_flange,
         de_r = (e_r_scalar - prev_er) / dt; prev_er = e_r_scalar
         dK = (K_hat - prev_K) / dt; prev_K = K_hat
 
+        # alpha 仲裁器输入统一为可观测物理量。FixedAlphaScheduler 作为对照组，
+        # 不需要阶段检测和风险计算。
         if isinstance(sched, FixedAlphaScheduler):
             alpha = sched.compute()
             phase_val = -1
@@ -312,6 +367,8 @@ def run_trial(robot, kin_tool, kin_flange,
             )
             phase_val = sched.phase_detector.phase.value
 
+        # no-RCM 力矩装配: ctrl 产生 tool 端笛卡尔力，robot_interface 再用
+        # J_tool^T 映射到 7 维关节力矩，并叠加姿态保持项。
         tau, u_tool, K_eff, integ_euler, error = compute_torque_no_rcm(
             ctrl, rs, kin_tool,
             e_r1, e_r2, e_f_vec_ctrl, sigma_f,
@@ -340,6 +397,7 @@ def run_trial(robot, kin_tool, kin_flange,
                 f"alpha={alpha:.2f} phase={phase_val}"
             )
 
+        # 保存所有关键状态，后续可直接从 npz 统计力 RMSE、位置误差和 alpha 曲线。
         logger.log(
             t=t, pos=pos_tool,
             pos_des=pos_tool_des,
@@ -363,6 +421,7 @@ def run_trial(robot, kin_tool, kin_flange,
         rate.sleep()
 
     rospy.loginfo("  Phase 3: Retreating...")
+    # 退回阶段通知调度器进入 RETREAT，使 alpha 回到位置优先。
     if hasattr(sched, 'set_retreat'):
         sched.set_retreat(True)
     safe_move_to_joint_position(robot, INIT_JOINTS)
@@ -371,6 +430,8 @@ def run_trial(robot, kin_tool, kin_flange,
 
 
 STRATEGIES = {
+    # 策略表保持原项目风格: 命令行传入 strategy 名称即可实例化调度器。
+    # 当前推荐组合: online_priority + --controller-mode pareto_iter。
     'fixed_08': lambda: FixedAlphaScheduler(0.8),
     'fixed_05': lambda: FixedAlphaScheduler(0.5),
     'fixed_02': lambda: FixedAlphaScheduler(0.2),
@@ -387,12 +448,23 @@ STRATEGIES = {
         F_max=Config.F_max,
         F_desired=Config.F_desired,
     ),
+    'online_priority': lambda: OnlinePriorityAdaptationAlphaScheduler(
+        dt=0.01,
+        F_min=Config.F_min,
+        F_max=Config.F_max,
+        F_desired=Config.F_desired,
+    ),
 }
 
 
 def main():
+    """命令行入口。
+
+    默认策略仍保留旧值以兼容历史脚本。当前版本推荐显式使用:
+      --strategy online_priority --controller-mode pareto_iter
+    """
     ap = argparse.ArgumentParser()
-    ap.add_argument('--strategy', default='continuous_force_margin')
+    ap.add_argument('--strategy', default='online_priority')
     ap.add_argument('--trials', type=int, default=1)
     ap.add_argument('--use-virtual-env', dest='use_virtual_env',
                     action='store_true', default=True,
@@ -400,8 +472,15 @@ def main():
     ap.add_argument('--no-virtual-env', dest='use_virtual_env',
                     action='store_false',
                     help='关闭虚拟接触环境')
-    ap.add_argument('--output-dir', default='results')
+    ap.add_argument(
+        '--output-dir',
+        default='/home/liu/franka_ws_1101/results',
+        help='实验结果根目录，默认保存到工作空间级 results，便于绘图脚本自动查找',
+    )
     ap.add_argument('--gains-file', default=None)
+    ap.add_argument('--controller-mode', default='are',
+                    choices=['are', 'pareto_iter'],
+                    help='are: 原 4D ARE 查表; pareto_iter: Algorithm 2 迭代 P1/P2')
     args = ap.parse_args()
 
     rospy.init_node("coop_gt_no_rcm")
@@ -415,11 +494,25 @@ def main():
     rospy.sleep(1.0)
 
     cfg = Config()
-    ctrl = CooperativeGameController()
 
+    # control_mode='are' 使用原始 4D ARE 查表；
+    # control_mode='pareto_iter' 使用 Algorithm 2 迭代生成同形状增益表。
+    ctrl = CooperativeGameController(control_mode=args.controller_mode)
+    rospy.loginfo(f"Controller mode: {args.controller_mode}")
+
+    need_precompute = True
     if args.gains_file and os.path.exists(args.gains_file):
         ctrl.load_gains(args.gains_file)
-    else:
+        need_precompute = not ctrl.has_precomputed_gains()
+        if need_precompute:
+            rospy.logwarn(
+                f"Gains file {args.gains_file} does not contain "
+                f"{args.controller_mode} data; recomputing."
+            )
+
+    if need_precompute:
+        # K_e 网格覆盖实验刚度区间和常见估计值，RLS 输出落在网格之间时
+        # get_gain 会双线性插值，避免增益突变。
         Ke_vals = sorted(set(
             [v[2] for v in cfg.stiffness_zones]
             + [50, 80, 100, 150, 200, 300, 500, 800, 1000, 1500,
@@ -430,7 +523,10 @@ def main():
             Ke_grid=Ke_vals,
         )
         os.makedirs(args.output_dir, exist_ok=True)
-        ctrl.save_gains(os.path.join(args.output_dir, 'coop_gains_no_rcm.npy'))
+        gains_name = 'coop_gains_no_rcm.npy'
+        if args.controller_mode == 'pareto_iter':
+            gains_name = 'coop_gains_no_rcm_pareto_iter.npy'
+        ctrl.save_gains(os.path.join(args.output_dir, gains_name))
 
     venv = VirtualStiffnessSurface(cfg.stiffness_zones) \
         if args.use_virtual_env else None

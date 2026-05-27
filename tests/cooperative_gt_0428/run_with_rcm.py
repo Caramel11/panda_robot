@@ -48,7 +48,7 @@ class Config:
     scan_start_x = 0.23
     scan_end_x   = 0.32
     scan_y       = 0.0
-    scan_z       = 0.007
+    scan_z       = 0.2
     approach_z   = 0.05
     scan_vx      = 0.002
 

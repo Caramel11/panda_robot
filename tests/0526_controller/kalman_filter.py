@@ -1,7 +1,19 @@
+"""
+模糊仲裁用的一阶增量积分器与 Kalman 融合器。
+
+当前推荐的 `online_priority` 不依赖 KalmanFilterFusion；本文件保留是为了
+支持旧的 `coop_fuzzy`、`force_margin`、`continuous_force_margin` 策略。
+这些策略会先通过模糊逻辑得到 lambda，再用本文件中的滤波器抑制跳变。
+"""
 import numpy as np
 
 
 class DeltaLambdaUpdater:
+    """将模糊规则输出的 Δλ 积分为 λ。
+
+    这是一个很轻量的 Euler 积分器，主要用于旧策略的对照实验。
+    """
+
     def __init__(self, lambda0=0.5, dt=0.01):
         self.lambda_current = lambda0  # 初始λ
         self.dt = dt  # 采样时间
@@ -14,6 +26,15 @@ class DeltaLambdaUpdater:
 
 
 class KalmanFilterFusion:
+    """二状态 Kalman 融合器。
+
+    状态向量为 [λ, Δλ]^T。观测来自两路模糊输出:
+      - z_k: lambda_based 规则给出的 λ；
+      - tau_k: [由 λ 差分得到的 Δλ, delta_lambda_based 规则输出的 Δλ]。
+
+    该滤波器不是当前 CAC2026 online_priority 的核心，只用于保留原策略。
+    """
+
     def __init__(self, dt=0.01, epsilon=0.01, alpha=0.9):
         self.y_hat = np.array([[0.5], [0.0]])  # 状态向量[λ_w, Δλ_w]^T
         self.P = np.diag([0.001, 0.001])  # 状态协方差矩阵

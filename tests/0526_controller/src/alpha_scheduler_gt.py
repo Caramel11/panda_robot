@@ -543,6 +543,139 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
         self.phase_prior_history = []
 
 
+class OnlinePriorityAdaptationAlphaScheduler:
+    """
+    CAC2026 Sec. III-C 在线力/位置优先级自适应仲裁器。
+
+    论文约定与本代码一致:
+      alpha 越大 → 越偏位置跟踪；
+      alpha 越小 → 越偏力调节。
+
+    r_e = ||S_f e_f|| / eps_f
+    r_b = max(0, (y_f-f_U)/(f_max-f_U), (f_L-y_f)/(f_L-f_min))
+    rho_f = max(r_e, r_b)
+    alpha_r = alpha_min + (alpha_max-alpha_min) exp(-kappa rho_f^2)
+    alpha_dot = lambda_alpha (alpha_r-alpha)
+
+    与旧模糊调度器相比，本类不依赖 fuzzy table，而是直接把“力误差”
+    和“越界风险”合成为 rho_f。这样更贴合论文 C 节的在线优先级更新，
+    同时保留 compute/reset/set_retreat/phase_detector 接口，方便 run_no_rcm
+    以最小改动切换策略。
+    """
+
+    def __init__(self, dt=0.01, F_desired=1.0, F_min=0.3, F_max=2.0,
+                 F_lower=None, F_upper=None, eps_f=0.25,
+                 alpha_min=0.05, alpha_max=0.95,
+                 kappa=2.5, lambda_alpha=8.0):
+        # 基本物理参数与安全边界。F_lower/F_upper 是期望力附近的舒适带，
+        # F_min/F_max 是绝对安全边界。
+        self.dt = float(dt)
+        self.F_desired = float(F_desired)
+        self.F_min = float(F_min)
+        self.F_max = float(F_max)
+        # 未显式给出舒适带时，默认取目标力 ±20%。
+        band_half_width = 0.2 * max(self.F_desired, 1e-6)
+        self.F_lower = float(F_lower) if F_lower is not None else max(
+            self.F_min + 1e-6, self.F_desired - band_half_width
+        )
+        self.F_upper = float(F_upper) if F_upper is not None else min(
+            self.F_max - 1e-6, self.F_desired + band_half_width
+        )
+        # eps_f 控制力误差归一化尺度；越小表示对力误差越敏感。
+        self.eps_f = float(max(eps_f, 1e-9))
+        self.alpha_min = float(alpha_min)
+        self.alpha_max = float(alpha_max)
+        self.kappa = float(kappa)
+        self.lambda_alpha = float(lambda_alpha)
+        self.name = "online_priority_alpha"
+
+        # 阶段检测器仍使用原项目接口。自由空间/接近/退回阶段强制位置优先，
+        # 防止未接触时为了“追踪力目标”而向表面猛压。
+        self.phase_detector = PhaseDetector(
+            F_thresh=self.F_min,
+            T_transient=1.0,
+            dt=self.dt,
+        )
+        # 初值取 alpha_min 与 alpha_max 的中点，随后由一阶滤波逐步收敛。
+        self.alpha = float(np.clip(
+            0.5 * (self.alpha_min + self.alpha_max),
+            self.alpha_min,
+            self.alpha_max,
+        ))
+        self.alpha_history = []
+        self.phase_history = []
+        self.risk_history = []
+
+    def compute(self, F_norm, e_f=0.0, K_hat=None, e_r=0.0, z_vel=0.0,
+                de_f=0.0, dK=0.0, de_r=0.0, F_desired=None,
+                F_min=None, F_max=None, **unused):
+        """计算当前周期 alpha。
+
+        兼容原调度器签名，因此保留 K_hat/e_r/de_f/dK/de_r 等参数。
+        本类实际只使用 F_norm、e_f、z_vel 和力边界参数，其余输入用于
+        与 run_no_rcm 的统一调用接口对齐。
+        """
+        F_desired = self.F_desired if F_desired is None else float(F_desired)
+        F_min = self.F_min if F_min is None else float(F_min)
+        F_max = self.F_max if F_max is None else float(F_max)
+        F_lower = float(np.clip(self.F_lower, F_min + 1e-6, F_max - 1e-6))
+        F_upper = float(np.clip(self.F_upper, F_lower + 1e-6, F_max - 1e-6))
+
+        # 先根据接触力和 z 向速度更新任务阶段。
+        phase = self.phase_detector.update(F_norm, z_vel)
+        if phase in (TaskPhase.FREE_SPACE, TaskPhase.APPROACHING,
+                     TaskPhase.RETREAT):
+            # 未进入有效接触调节前，alpha 目标值固定为位置优先。
+            alpha_r = self.alpha_max
+            rho_f = 0.0
+            r_e = 0.0
+            r_b = 0.0
+        else:
+            # r_e: 归一化力误差风险；r_b: 离开舒适力带/安全带的边界风险。
+            r_e = abs(float(e_f)) / self.eps_f
+            r_b = max(
+                0.0,
+                (float(F_norm) - F_upper) / max(F_max - F_upper, 1e-9),
+                (F_lower - float(F_norm)) / max(F_lower - F_min, 1e-9),
+            )
+            # 论文中取较大的风险作为当前力调节优先级依据。
+            rho_f = max(r_e, r_b)
+            alpha_r = self.alpha_min + (
+                self.alpha_max - self.alpha_min
+            ) * np.exp(-self.kappa * rho_f * rho_f)
+
+        # 离散化一阶动态 alpha_dot=lambda(alpha_r-alpha)。
+        beta = float(np.clip(self.lambda_alpha * self.dt, 0.0, 1.0))
+        self.alpha = self.alpha + beta * (float(alpha_r) - self.alpha)
+        self.alpha = float(np.clip(
+            self.alpha,
+            self.alpha_min,
+            self.alpha_max,
+        ))
+
+        # 历史量用于离线分析 alpha 曲线和风险项。
+        self.alpha_history.append(self.alpha)
+        self.phase_history.append(phase.value)
+        self.risk_history.append((rho_f, r_e, r_b, alpha_r))
+        return self.alpha
+
+    def set_retreat(self, val=True):
+        """通知阶段检测器进入/退出退回阶段。"""
+        self.phase_detector.set_retreat(val)
+
+    def reset(self):
+        """每次 trial 前恢复初始 alpha 和历史记录。"""
+        self.alpha = float(np.clip(
+            0.5 * (self.alpha_min + self.alpha_max),
+            self.alpha_min,
+            self.alpha_max,
+        ))
+        self.alpha_history = []
+        self.phase_history = []
+        self.risk_history = []
+        self.phase_detector.reset()
+
+
 class FixedAlphaScheduler:
     """固定 α 对照组"""
 

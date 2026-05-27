@@ -29,6 +29,7 @@ from panda_robot import PandaArm, PandaKinematics
 from src.gt_controller import CooperativeGameController
 from src.alpha_scheduler_gt import (
     PhaseAwareFuzzyAlphaScheduler, ForceMarginFuzzyAlphaScheduler,
+    ContinuousForceMarginFuzzyAlphaScheduler,
     FixedAlphaScheduler
 )
 from src.env_estimator import EnvironmentEstimator
@@ -45,22 +46,20 @@ from src.robot_interface import (
 
 
 class Config:
-    scan_start_x = 0.25
-    scan_end_x   = 0.40
+    scan_start_x = 0.40
+    scan_end_x   = 0.48
     scan_y       = 0.0
     scan_z       = 0.007
     approach_z   = 0.05
-    scan_vx      = 0.005
+    scan_vx      = 0.002
     F_desired    = 0.5
     F_min        = 0.3
     F_max        = 1.0
     force_axis   = 2
 
     stiffness_zones = [
-        (0.25, 0.29, 500,  5),
-        (0.29, 0.33, 1000, 10),
-        (0.33, 0.37, 200,  2),
-        (0.37, 0.41, 500,  5),
+        (0.40, 0.44, 300, 5),
+        (0.44, 0.48, 500, 8),
     ]
 
     ctrl_rate = 100
@@ -68,6 +67,7 @@ class Config:
     eps_r = 1.0
     eps_f = 2.0
     settle_time = 2.0
+    contact_force_blend_time = 0.5
     force_filter_tau = 0.04
     stiffness_filter_tau = 0.12
     torque_rate_limit = 120.0
@@ -264,7 +264,9 @@ def run_trial(robot, kin_tool, kin_flange,
         e_r1 = tp - x_ref
         e_r2 = tv - xdot_ref
         e_f_vec = F_meas - F_des
-        sigma_f = sigma_f_int.update(e_f_vec)
+        force_blend = min(1.0, max(0.0, t / cfg.contact_force_blend_time))
+        e_f_vec_ctrl = force_blend * e_f_vec
+        sigma_f = sigma_f_int.update(e_f_vec_ctrl)
 
         F_actual = abs(F_z)
         e_f_scalar = F_actual - cfg.F_desired
@@ -290,7 +292,7 @@ def run_trial(robot, kin_tool, kin_flange,
 
         tau, u_tool, K_eff, integ_euler, error = compute_torque_no_rcm(
             ctrl, rs, kin_tool,
-            e_r1, e_r2, e_f_vec, sigma_f,
+            e_r1, e_r2, e_f_vec_ctrl, sigma_f,
             alpha=alpha, K_e_hat=K_hat,
             ref_euler_fixed=ref_euler_fixed,
             integ_euler=integ_euler, dt=dt_loop,
@@ -342,6 +344,7 @@ def run_trial(robot, kin_tool, kin_flange,
             K_eff=K_eff,
             x_desired=x_cur,
             error_rcm=0.0, error_track=error[1],
+            arbitration_strategy=sched.name,
             u_norm=np.linalg.norm(tau),
             phase=phase_val,
         )
@@ -366,12 +369,18 @@ STRATEGIES = {
         F_max=Config.F_max,
         F_desired=Config.F_desired,
     ),
+    'continuous_force_margin': lambda: ContinuousForceMarginFuzzyAlphaScheduler(
+        dt=0.01,
+        F_min=Config.F_min,
+        F_max=Config.F_max,
+        F_desired=Config.F_desired,
+    ),
 }
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--strategy', default='force_margin')
+    ap.add_argument('--strategy', default='continuous_force_margin')
     ap.add_argument('--trials', type=int, default=3)
     ap.add_argument('--use-virtual-env', action='store_true')
     ap.add_argument('--output-dir', default='results')
