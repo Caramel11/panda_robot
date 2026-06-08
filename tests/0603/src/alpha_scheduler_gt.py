@@ -518,12 +518,12 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
 
     def __init__(self, dt=0.01, F_min=0.2, F_max=1.0,
                  F_desired=0.5, phase_prior=None,
-                 safe_tracking_alpha=0.82,
-                 safe_tracking_extra=0.06,
+                 safe_tracking_alpha=0.78,
+                 safe_tracking_extra=0.04,
                  safe_margin_start=0.45,
                  safe_margin_full=0.75,
-                 force_error_start=0.08,
-                 force_error_full=0.25,
+                 force_error_start=0.04,
+                 force_error_full=0.12,
                  track_error_start=0.001,
                  track_error_full=0.003,
                  **kwargs):
