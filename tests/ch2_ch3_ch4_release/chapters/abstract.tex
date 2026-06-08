@@ -1,0 +1,17 @@
+% !TeX root = ../main_ustc.tex
+
+\begin{abstract}
+约束操作场景下的人机协同控制需要同时处理操作者意图、机器人自主目标、几何约束和环境接触安全之间的耦合关系。针对刚性几何约束任务中控制权分配不清、柔性接触任务中位置精度与接触力安全难以兼顾等问题，本文围绕合作博弈共享控制展开研究。首先，建立机器人运动学、动力学、约束运动、接触建模和稳定性分析等理论基础；其次，面向刚性约束操作任务，构造意图驱动的合作微分博弈共享控制方法，通过人机仲裁参数在操作者监督目标和机器人自主目标之间形成可解释的帕累托权衡；再次，面向柔性接触扫描任务，建立含残差项的力--位增广系统，引入环境参数在线估计与力安全裕度仲裁机制，实现位置跟踪和接触力调节的协同优化；最后，将上述两类方法融合为双层动态仲裁框架，并设计远心运动约束下的人机协同恒力扫描实物实验方案。仿真与实验设计表明，所提方法能够在保持几何约束合规性的同时提升操作者意图响应能力和接触安全性，为约束接触操作中的人机协同控制提供了系统化思路。
+
+\ustcsetup{
+  keywords  = {人机协同控制, 合作博弈, 几何约束, 柔性接触, 环境刚度估计},
+  keywords* = {Human-robot collaborative control, Cooperative game, Geometric constraint, Flexible contact, Environment stiffness estimation},
+}
+\end{abstract}
+
+\begin{abstract*}
+Human-robot collaborative control in constrained manipulation requires a unified treatment of operator intention, robot autonomy, geometric constraints, and contact safety. This thesis investigates cooperative game based shared control for two representative tasks. For rigidly constrained manipulation, an intention-driven cooperative differential game controller is formulated, in which a human-robot arbitration parameter provides an interpretable Pareto trade-off between the operator supervision objective and the robot autonomous objective. For flexible contact scanning, an augmented force-position system with residual dynamics is established, and online environment parameter estimation is introduced to schedule the controller according to local contact conditions. A force safety margin based arbitration mechanism is further designed to coordinate position tracking and contact force regulation. On this basis, the two methods are integrated into a dual-layer dynamic arbitration framework, and a physical experiment scheme for human-robot collaborative constant-force scanning under remote-center-of-motion constraints is proposed. The simulation analysis and experiment design indicate that the proposed framework can improve intention responsiveness and contact safety while maintaining geometric constraint compliance.
+\ustcsetup{
+  keywords* = {Human-robot collaborative control, Cooperative game, Geometric constraint, Flexible contact, Environment stiffness estimation},
+}
+\end{abstract*}

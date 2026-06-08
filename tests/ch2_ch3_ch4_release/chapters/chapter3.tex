@@ -1,0 +1,699 @@
+% !TeX root = ../main_ustc.tex
+\chapter{面向刚性约束操作场景的意图驱动合作微分博弈共享控制方法}
+\label{chap:intent_gt_rigid}
+
+上一章回顾了机器人运动学与动力学、约束运动、接触建模、最优控制和稳定性分析等预备知识，并统一了后续章节使用的基本符号。本章进一步讨论刚性约束操作场景下的共享控制方法。这里的“刚性约束”并不局限于微创手术中的穿刺孔约束，也可以表示工业装配中的导向孔、深腔操作中的固定通道、危险环境遥操作中的隔离端口，以及其他要求工具轴线通过固定区域的精密操作任务。医学钉转移任务在本章中作为代表性验证场景出现，其作用是提供标准化、可重复且约束明确的实验平台，而不是限定方法的适用范围。
+
+与完全遥操作不同，共享控制并不要求操作者持续给出低层运动命令。操作者更多地承担监督角色：在机器人自主参考合理时保持低干预，在轨迹需要微调时施加局部修正，在目标发生变化时给出重定向意图，并在风险增大时临时提高人侧控制权。由此带来的核心问题是：如何在机器人自主目标、人类监督目标和刚性几何约束之间建立可解释、可计算且稳定的控制律。本章围绕这一问题，构造意图驱动的人机合作微分博弈共享控制框架。与先给出仲裁规则、再解释控制器的工程式写法不同，本章按照“机械臂动力学建模、任务空间阻抗等效、合作微分博弈控制器求解、监督参考与角色仲裁、理论分析、仿真验证”的顺序展开。这样的结构能够先从关节空间动力学出发建立可用于控制设计的任务空间模型，再明确人和机器人作为两个作用于同一受控系统的参与方如何形成共享最优控制律，最后说明仲裁参数如何在线选择该帕累托解。
+
+本章沿用第\ref{chap:preliminaries}章中的机器人动力学、几何约束和最优控制记号。为与第四章区分，本文在本章中使用 $z$ 表示刚性约束共享控制状态，使用 $\alpha_{\mathrm{HR}}$ 表示人机监督权重；第四章中的力--位增广状态 $\xi$ 和力--位优先级 $\alpha_{\mathrm{FP}}$ 不在本章中作为控制权重使用。
+
+\section{问题描述与控制目标}
+\label{sec:ch3_problem}
+
+本节先从任务场景出发说明刚性约束操作的共性，再将操作者监督输入、机器人自主参考和几何约束统一为后续控制设计的数学问题。
+
+\paragraph{任务场景与约束目标。}
+\label{subsec:ch3_task}
+
+考虑主从式机器人辅助操作系统。操作者通过主端设备输入手部位移、速度或交互力信号，从端机器人携带细长工具在任务空间内执行操作。工具轴线需要通过给定的固定几何约束点。对于腹腔镜训练平台，该点对应穿刺孔附近的远心运动中心；对于工业插入、深孔装配和隔离腔操作，该点可表示为导向孔中心、夹具约束中心或密封通道中心。若忽略工具柔性变形，工具尖端、法兰和约束点三者之间满足确定的几何关系。
+
+刚性约束操作任务具有三个特征。第一，目标通常是离散而结构化的，例如从一个目标点转移至另一个目标点，或依次完成接近、抓取、转移和放置。第二，几何约束对工具位姿具有强约束作用，末端位置变化会引起工具姿态同步调整。第三，操作者输入具有多重含义。短时、小幅且连续的输入通常表示局部轨迹修正；持续并指向另一目标的输入更可能表示目标重定向；大幅且持续的输入则表示临时接管。若将所有输入都直接映射为从端运动，系统会失去自主性；若完全忽略这些输入，系统又无法体现操作者的监督意图。因此，本章将操作者输入解释为对共享控制目标的动态调节，而不是简单的外部扰动。
+
+设工具尖端位置为 $x_T(t)\in\R^3$，法兰位置为 $x_F(t)\in\R^3$，固定几何约束点为 $p_c\in\R^3$，工具有效长度为 $L>0$。工具轴线记为
+\begin{equation}
+  \ell(t)=\{x_F(t)+s(x_T(t)-x_F(t))\mid s\in\R\} .
+  \label{eq:ch3_tool_axis}
+\end{equation}
+远心运动或通道约束误差定义为约束点到工具轴线的距离
+\begin{equation}
+  e_{\mathrm{gc}}(t)=\dist(p_c,\ell(t)).
+  \label{eq:ch3_gc_error}
+\end{equation}
+其中下标 $\mathrm{gc}$ 表示几何约束。后续在微创场景讨论中，该误差也称为远心运动误差。
+
+\paragraph{共享控制问题定义。}
+\label{subsec:ch3_problem_def}
+
+在任务空间中定义误差状态
+\begin{equation}
+  z(t)=\begin{bmatrix}e_x^{\T}(t)&e_v^{\T}(t)\end{bmatrix}^{\T}\in\R^{2m},
+  \label{eq:ch3_state_z}
+\end{equation}
+其中 $m$ 为任务空间平移维数，$e_x(t)=x(t)-x_{\mathrm{ref}}(t)$ 为位置误差，$e_v(t)=\dot x(t)-\dot x_{\mathrm{ref}}(t)$ 为速度误差，$x(t)$ 表示执行控制律的任务空间点，$x_{\mathrm{ref}}(t)$ 表示由共享控制框架生成的参考点。对于无远心运动约束抽象任务，$x(t)$ 可取为工具尖端位置；对于本章实验平台，控制命令最终通过工具到法兰几何映射转化为法兰参考，再由从端机器人执行。
+
+\begin{problem}[刚性几何约束下的人机监督共享控制问题]
+\label{prob:ch3_shared_control}
+给定机器人任务空间动力学、机器人自主参考 $z_r(t)$、操作者监督参考 $z_h(t)$、几何约束点 $p_c$、工具长度 $L$ 以及主端交互信号 $s_h(t)$，设计共享控制律 $u(t)\in\R^p$ 与人机仲裁参数 $\alpha_{\mathrm{HR}}(t)$，使闭环系统满足以下要求：
+\begin{enumerate}[label=(\arabic*)]
+  \item 任务空间误差 $z(t)$ 有界，并在固定仲裁参数下渐近收敛；
+  \item 几何约束误差 $e_{\mathrm{gc}}(t)$ 保持在允许范围内；
+  \item 控制输入 $u(t)$ 与主端反馈力 $F_{\mathrm{fb}}(t)$ 有界；
+  \item 当操作者干预增强时，人侧目标在共享控制中的权重增加；当操作者干预减弱时，机器人自主目标重新占主导。
+\end{enumerate}
+\end{problem}
+
+\begin{assumption}[任务空间动力学与参考信号]
+\label{ass:ch3_dynamics}
+在共享控制层关注的频率范围内，关节空间动力学\eqref{eq:ch3_joint_dynamics}经任务空间转换、内环补偿和工作点线性化后可等效为任务空间误差系统
+\begin{equation}
+  \dot z(t)=Az(t)+Bu(t),
+  \label{eq:ch3_linear_model}
+\end{equation}
+其中 $A\in\R^{2m\times 2m}$，$B\in\R^{2m\times m}$。矩阵对 $(A,B)$ 可镇定。机器人自主参考 $z_r(t)$、人侧监督参考 $z_h(t)$ 及其一阶导数有界。人侧目标权重矩阵 $Q_h$ 与机器人侧目标权重矩阵 $Q_r$ 为半正定矩阵，控制权重矩阵 $R_h$ 与 $R_r$ 为正定矩阵。
+\end{assumption}
+
+\begin{assumption}[几何约束映射非奇异性]
+\label{ass:ch3_rcm_nonsingular}
+设工具尖端期望位置为 $x_T^d(t)$。存在正常数 $r_{\min}>0$，使得
+\begin{equation}
+  \norm{p_c-x_T^d(t)}\ge r_{\min},\quad \forall t\ge 0 .
+  \label{eq:ch3_rcm_nonzero}
+\end{equation}
+该条件保证 工具到法兰正向几何映射中的方向归一化始终有定义。
+\end{assumption}
+
+\begin{definition}[人机监督参考与机器人自主参考]
+\label{def:ch3_refs}
+机器人自主参考 $x_{\mathrm{auto}}(t)$ 由任务规划器、候选目标集合和局部环境信息生成，表示机器人在无人干预时希望执行的名义路径。操作者监督参考 $x_h(t)$ 由主端直接遥操作参考 $x_{\mathrm{tele}}(t)$ 与自主参考融合得到：
+\begin{equation}
+  x_h(t)=\beta(t)x_{\mathrm{tele}}(t)+\bigl(1-\beta(t)\bigr)x_{\mathrm{auto}}(t),
+  \label{eq:ch3_ref_blending}
+\end{equation}
+其中 $\beta(t)\in[0,1]$ 为参考层融合系数。该系数只作用于运动学参考生成，不等同于后续合作博弈控制律中的人机仲裁参数。
+\end{definition}
+
+\begin{definition}[人机仲裁参数]
+\label{def:ch3_alpha_hr}
+人机仲裁参数记为 $\alpha_{\mathrm{HR}}(t)\in[\alpha_{\min},\alpha_{\max}]\subset(0,1)$。当 $\alpha_{\mathrm{HR}}(t)$ 增大时，合作控制律更加重视人侧监督目标；当 $\alpha_{\mathrm{HR}}(t)$ 减小时，合作控制律更加重视机器人自主目标。该符号只在本章表示人机控制权，不表示第四章中的力--位优先级。
+\end{definition}
+
+
+\section{合作博弈控制建模与求解}
+\label{sec:ch3_game_controller}
+
+在明确刚性约束操作的控制目标后，本节从动力学模型、代价函数和反馈律三个层面展开，使共享控制问题由任务描述过渡到可求解的合作博弈形式。
+
+\subsection{任务空间共享控制模型}
+\label{subsec:ch3_manipulator_dynamics}
+
+为了使后续博弈控制器建立在明确的机器人动力学模型之上，本节先给出从关节空间到任务空间的动力学转换。设从端机械臂具有 $n_q$ 个关节，关节位置、速度和加速度分别为 $q,\dot q,\ddot q\in\R^{n_q}$。机械臂关节空间动力学写为
+\begin{equation}
+  M_q(q)\ddot q+C_q(q,\dot q)\dot q+G_q(q)=\tau,
+  \label{eq:ch3_joint_dynamics}
+\end{equation}
+其中 $M_q(q)\in\R^{n_q\times n_q}$ 为关节空间惯性矩阵，$C_q(q,\dot q)\in\R^{n_q\times n_q}$ 为科氏力与离心力矩阵，$G_q(q)\in\R^{n_q}$ 为重力项，$\tau\in\R^{n_q}$ 为关节力矩输入。该形式是机械臂动力学的标准表达，也与安全人机协作运动规划文献中从关节空间建立任务控制模型的方式一致\cite{li2025optimal}。
+
+令受控任务空间变量为 $p\in\R^m$。在刚性约束操作中，$p$ 可表示工具尖端位置，也可表示经几何映射后的法兰位置。正运动学关系为
+\begin{equation}
+  p=\Phi(q),
+  \label{eq:ch3_forward_kinematics}
+\end{equation}
+其中 $\Phi(\cdot)$ 为正运动学映射。对\eqref{eq:ch3_forward_kinematics}求导得到
+\begin{equation}
+  \dot p=J(q)\dot q,
+  \label{eq:ch3_task_velocity}
+\end{equation}
+其中 $J(q)\in\R^{m\times n_q}$ 为任务雅可比矩阵。在工作区内假设 $J(q)$ 行满秩，关节速度可通过伪逆近似表示为
+\begin{equation}
+  \dot q=J^+(q)\dot p,
+  \label{eq:ch3_qdot_from_pdot}
+\end{equation}
+进一步对时间求导可得
+\begin{equation}
+  \ddot q=\dot J^+(q)\dot p+J^+(q)\ddot p .
+  \label{eq:ch3_qddot_from_pddot}
+\end{equation}
+将\eqref{eq:ch3_qdot_from_pdot}和\eqref{eq:ch3_qddot_from_pddot}代入\eqref{eq:ch3_joint_dynamics}，并左乘 $J^{+\T}(q)$，可得到任务空间动力学
+\begin{equation}
+  M_p(q)\ddot p+C_p(q,\dot q)\dot p+G_p(q)=\mu,
+  \label{eq:ch3_task_dynamics}
+\end{equation}
+其中 $\mu\in\R^m$ 为任务空间等效输入，且
+\begin{align}
+  M_p(q)&=J^{+\T}(q)M_q(q)J^+(q),
+  \label{eq:ch3_Mp}\\
+  C_p(q,\dot q)&=J^{+\T}(q)\bigl(M_q(q)\dot J^+(q)+C_q(q,\dot q)J^+(q)\bigr),
+  \label{eq:ch3_Cp}\\
+  G_p(q)&=J^{+\T}(q)G_q(q),
+  \label{eq:ch3_Gp}\\
+  \mu&=J^{+\T}(q)\tau .
+  \label{eq:ch3_mu}
+\end{align}
+当 $J(q)$ 在局部保持常秩时，也可利用 $\dot J^+(q)=-J^+(q)\dot J(q)J^+(q)$ 将 $C_p$ 写成等价形式。本文保留\eqref{eq:ch3_Cp}的表达，是为了清晰呈现任务空间惯性项、速度相关项与重力项的来源。
+
+令纯机器人任务状态为
+\begin{equation}
+  \chi(t)=\begin{bmatrix}p^{\T}(t)&\dot p^{\T}(t)\end{bmatrix}^{\T} .
+  \label{eq:ch3_chi_robot_state}
+\end{equation}
+由\eqref{eq:ch3_task_dynamics}可得
+\begin{equation}
+  \dot\chi=F_r(\chi)\chi+B_r(\chi)u_r^{\mathrm{dyn}},
+  \label{eq:ch3_robot_state_space_nonlinear}
+\end{equation}
+其中
+\begin{equation}
+  F_r(\chi)=
+  \begin{bmatrix}
+    0&I\\
+    0&-M_p^{-1}(q)C_p(q,\dot q)
+  \end{bmatrix},
+  \quad
+  B_r(\chi)=
+  \begin{bmatrix}
+    0\\
+    M_p^{-1}(q)
+  \end{bmatrix},
+  \quad
+  u_r^{\mathrm{dyn}}=\mu-G_p(q).
+  \label{eq:ch3_Fr_Br}
+\end{equation}
+式\eqref{eq:ch3_robot_state_space_nonlinear}表明，实际机械臂在任务空间内仍是状态相关的非线性系统。后续共享控制器并不直接忽略该非线性，而是在内环补偿、工作点线性化和阻抗等效的基础上构造上层微分博弈模型。也就是说，博弈控制器处理的是经过任务空间动力学整形后的交互系统；从端执行时，再通过\eqref{eq:ch3_task_dynamics}和雅可比映射回到机械臂关节力矩或速度命令。
+
+\paragraph{共享控制系统模型。}
+\label{subsec:ch3_impedance_game_model}
+
+在上述任务空间动力学基础上，操作者和机器人均可被视为作用于同一受控系统的参与方。参考微分博弈在角色仲裁中的建模思路，先将低层柔顺执行环节抽象为给定的笛卡尔阻抗系统，再在该系统之上构造人机双方的目标函数和共享最优控制律\cite{franceschi2023role,franceschi2023modeling}。这样做的优点是：低层阻抗参数保持固定，角色变化不再依赖在线修改阻抗参数，而是通过博弈代价和反馈律改变人、机器人目标在控制输入中的相对作用。
+
+在任务空间内，给定期望惯性、阻尼和刚度矩阵 $M_i,C_i,K_i\succ0$，阻抗型共享系统写为
+\begin{equation}
+  M_i(\ddot x-\ddot x_0)+C_i(\dot x-\dot x_0)+K_i(x-x_0)=u_h(t)+u_r(t),
+  \label{eq:ch3_impedance_two_input}
+\end{equation}
+其中 $x\in\R^m$ 为受控任务空间坐标，$x_0$ 为阻抗平衡点，$u_h(t)$ 表示由操作者交互产生的等效输入，$u_r(t)$ 表示机器人自主控制输入。令
+\begin{equation}
+  z(t)=\begin{bmatrix}(x-x_0)^{\T}&\dot x^{\T}\end{bmatrix}^{\T},
+\end{equation}
+则\eqref{eq:ch3_impedance_two_input}可写成双输入状态空间形式
+\begin{equation}
+  \dot z=Az+B_hu_h+B_ru_r,
+  \label{eq:ch3_two_player_system}
+\end{equation}
+其中
+\begin{equation}
+  A=\begin{bmatrix}0&I\\-M_i^{-1}K_i&-M_i^{-1}C_i\end{bmatrix},\quad
+  B_h=B_r=\begin{bmatrix}0\\M_i^{-1}\end{bmatrix} .
+  \label{eq:ch3_AB_two_player}
+\end{equation}
+若定义合并输入 $u=[u_h^{\T},u_r^{\T}]^{\T}$ 与合并输入矩阵 $B=[B_h,B_r]$，则系统可简写为
+\begin{equation}
+  \dot z=Az+Bu .
+  \label{eq:ch3_game_system}
+\end{equation}
+本章后续的合作博弈控制律均基于\eqref{eq:ch3_game_system}建立。这里的 $u_h$ 与 $u_r$ 不一定都直接由硬件力源执行。在遥操作和机器人辅助操作中，人侧输入可由主端测量信号、监督参考或反馈力提示间接体现；机器人侧输入由从端控制器执行。该抽象的核心并不在于区分两个物理执行器，而在于把人侧目标和机器人侧目标放入同一动态系统中进行统一优化。
+
+\subsection{合作代价与帕累托控制律}
+\label{subsec:ch3_game_costs}
+
+设 $z_{\mathrm{ref},h}(t)$ 表示人侧监督参考状态，$z_{\mathrm{ref},r}(t)$ 表示机器人自主参考状态。人侧目标希望系统响应操作者意图并降低操作者交互负担；机器人侧目标希望系统保持任务计划、几何约束和轨迹平滑性。二者目标通常不完全一致，但在共享控制任务中应通过合作而非对抗实现折中。
+
+\begin{definition}[人侧目标和机器人侧目标代价函数]
+\label{def:ch3_costs}
+给定系统\eqref{eq:ch3_game_system}，定义人侧代价函数与机器人侧代价函数为
+\begin{equation}
+  J_h=\int_0^\infty\left[(z-z_{\mathrm{ref},h})^{\T}Q_{h,h}(z-z_{\mathrm{ref},h})+(z-z_{\mathrm{ref},r})^{\T}Q_{h,r}(z-z_{\mathrm{ref},r})+u_h^{\T}R_hu_h\right]\dd t,
+  \label{eq:ch3_Jh_game}
+\end{equation}
+\begin{equation}
+  J_r=\int_0^\infty\left[(z-z_{\mathrm{ref},h})^{\T}Q_{r,h}(z-z_{\mathrm{ref},h})+(z-z_{\mathrm{ref},r})^{\T}Q_{r,r}(z-z_{\mathrm{ref},r})+u_r^{\T}R_ru_r\right]\dd t,
+  \label{eq:ch3_Jr_game}
+\end{equation}
+其中 $Q_{h,h},Q_{h,r},Q_{r,h},Q_{r,r}\succeq0$ 为状态权重矩阵，$R_h,R_r\succ0$ 为输入权重矩阵。
+\end{definition}
+
+上述写法保留了人和机器人可能同时关注两类参考的可能性。若 $Q_{h,r}=0$，表示人侧只关注自身监督参考；若 $Q_{r,h}=0$，表示机器人侧只关注自主参考。若二者均不为零，则表示某一方在代价中也考虑对方目标，这对应更强的协作假设。
+
+在合作微分博弈中，人和机器人达成共享目标。给定人机仲裁参数 $\alpha_{\mathrm{HR}}\in(0,1)$，定义合作代价
+\begin{equation}
+  J_c=\alpha_{\mathrm{HR}}J_h+(1-\alpha_{\mathrm{HR}})J_r .
+  \label{eq:ch3_Jc_game}
+\end{equation}
+该参数不是先验的固定权重，而是后续角色仲裁模块在线给出的帕累托解选择变量。当 $\alpha_{\mathrm{HR}}$ 较大时，人侧代价在共享目标中占主导；当其较小时，机器人自主目标占主导。
+
+\paragraph{帕累托反馈律。}
+\label{subsec:ch3_pareto_game_law}
+
+将\eqref{eq:ch3_Jh_game}和\eqref{eq:ch3_Jr_game}代入\eqref{eq:ch3_Jc_game}，可以得到等效二次型最优控制问题。定义
+\begin{equation}
+  Q_c=\alpha_{\mathrm{HR}}(Q_{h,h}+Q_{h,r})+(1-\alpha_{\mathrm{HR}})(Q_{r,h}+Q_{r,r}),
+  \label{eq:ch3_Qc_game}
+\end{equation}
+以及
+\begin{equation}
+  R_c=\begin{bmatrix}\alpha_{\mathrm{HR}}R_h&0\\0&(1-\alpha_{\mathrm{HR}})R_r\end{bmatrix} .
+  \label{eq:ch3_Rc_game}
+\end{equation}
+同时定义
+\begin{equation}
+  Q_h^{\alpha}=\alpha_{\mathrm{HR}}Q_{h,h}+(1-\alpha_{\mathrm{HR}})Q_{r,h},\quad
+  Q_r^{\alpha}=\alpha_{\mathrm{HR}}Q_{h,r}+(1-\alpha_{\mathrm{HR}})Q_{r,r} .
+  \label{eq:ch3_Qhr_alpha}
+\end{equation}
+若 $Q_c$ 非奇异，则合作博弈对应的共享参考可写为
+\begin{equation}
+  z_c=Q_c^{-1}\left(Q_h^{\alpha}z_{\mathrm{ref},h}+Q_r^{\alpha}z_{\mathrm{ref},r}\right).
+  \label{eq:ch3_shared_ref_cgt}
+\end{equation}
+式\eqref{eq:ch3_shared_ref_cgt}说明，合作博弈控制器并不是简单地对人和机器人的控制输入线性加权，而是先在代价函数层面形成一个由权重矩阵调节的共享参考，再围绕该共享参考求解最优反馈律。这一点也是微分博弈建模相对于常规策略混合方法的关键区别。
+
+令 $\tilde z=z-z_c$，则合作代价可写为
+\begin{equation}
+  J_c=\int_0^\infty\left(\tilde z^{\T}Q_c\tilde z+u^{\T}R_cu\right)\dd t .
+  \label{eq:ch3_cgt_lqr_cost}
+\end{equation}
+
+\begin{lemma}[固定仲裁参数下加权矩阵的正定性]
+\label{lem:ch3_positive}
+若 $Q_{h,h},Q_{h,r},Q_{r,h},Q_{r,r}\succeq0$，$R_h,R_r\succ0$，且 $\alpha_{\mathrm{HR}}\in[\alpha_{\min},\alpha_{\max}]\subset(0,1)$，则 $Q_c\succeq0$ 且 $R_c\succ0$。
+\end{lemma}
+
+\begin{proof}
+对任意向量 $y=[y_h^{\T},y_r^{\T}]^{\T}\ne0$，由\eqref{eq:ch3_Rc_game}有
+\begin{equation}
+  y^{\T}R_cy=\alpha_{\mathrm{HR}}y_h^{\T}R_hy_h+(1-\alpha_{\mathrm{HR}})y_r^{\T}R_ry_r .
+\end{equation}
+由于 $R_h,R_r\succ0$ 且 $\alpha_{\mathrm{HR}}\in(0,1)$，上式对任意非零 $y$ 严格大于零，故 $R_c\succ0$。同理，由各状态权重矩阵半正定和\eqref{eq:ch3_Qc_game}可得 $x^{\T}Q_cx\ge0$ 对任意 $x$ 成立，因此 $Q_c\succeq0$。引理得证。
+\end{proof}
+
+\begin{theorem}[固定仲裁参数下的最优共享控制律]
+\label{thm:ch3_lqr}
+在\cref{ass:ch3_dynamics}成立的条件下，给定固定仲裁参数 $\alpha_{\mathrm{HR}}\in[\alpha_{\min},\alpha_{\max}]$。若 $P_\alpha=P_\alpha^{\T}\succeq0$ 是代数黎卡提方程
+\begin{equation}
+  A^{\T}P_\alpha+P_\alpha A-P_\alpha BR_c^{-1}B^{\T}P_\alpha+Q_c=0
+  \label{eq:ch3_are}
+\end{equation}
+的稳定化解，则合作代价\eqref{eq:ch3_cgt_lqr_cost}对应的最优反馈控制律为
+\begin{equation}
+  u_\alpha^*(t)=-R_c^{-1}B^{\T}P_\alpha\tilde z(t) .
+  \label{eq:ch3_u_star}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+取候选值函数
+\begin{equation}
+  V_\alpha(\tilde z)=\tilde z^{\T}P_\alpha\tilde z .
+\end{equation}
+在固定共享参考的局部分析中，$\dot{\tilde z}=A\tilde z+Bu$。对应的哈密顿--雅可比--贝尔曼方程为
+\begin{equation}
+  0=\min_u\left[\tilde z^{\T}Q_c\tilde z+u^{\T}R_c u+\nabla V_\alpha^{\T}(A\tilde z+Bu)\right].
+  \label{eq:ch3_hjb}
+\end{equation}
+由于 $\nabla V_\alpha=2P_\alpha\tilde z$，哈密顿函数为
+\begin{equation}
+  \mathcal{H}_\alpha(\tilde z,u)=\tilde z^{\T}Q_c\tilde z+u^{\T}R_cu+2\tilde z^{\T}P_\alpha A\tilde z+2\tilde z^{\T}P_\alpha Bu .
+\end{equation}
+对 $u$ 求偏导，得到
+\begin{equation}
+  \frac{\partial \mathcal{H}_\alpha}{\partial u}=2R_cu+2B^{\T}P_\alpha\tilde z .
+\end{equation}
+由\cref{lem:ch3_positive}可知 $R_c\succ0$，因此哈密顿函数关于 $u$ 严格凸。令偏导为零，得到唯一极小点
+\begin{equation}
+  u_\alpha^*=-R_c^{-1}B^{\T}P_\alpha\tilde z .
+\end{equation}
+将该控制律代回\eqref{eq:ch3_hjb}，可得
+\begin{equation}
+  \tilde z^{\T}\left(A^{\T}P_\alpha+P_\alpha A-P_\alpha BR_c^{-1}B^{\T}P_\alpha+Q_c\right)\tilde z=0 .
+\end{equation}
+由于该式对任意 $\tilde z$ 成立，括号中的矩阵必须为零，故 $P_\alpha$ 满足\eqref{eq:ch3_are}。定理得证。
+\end{proof}
+
+\paragraph{反馈提示与约束执行。}
+\label{subsec:ch3_feedback_execution}
+
+合作微分博弈控制律给出的是共享系统的任务空间控制输入。为了使操作者理解机器人自主目标和当前监督输入之间的偏差，主端设备可提供方向性反馈力
+\begin{equation}
+  F_{\mathrm{fb}}(t)=-K_h(x_m(t)-x_{\mathrm{auto}}^m(t))-D_h(\dot x_m(t)-\dot x_{\mathrm{auto}}^m(t)),
+  \label{eq:ch3_feedback_force}
+\end{equation}
+其中 $x_m(t)$ 为主端位置，$x_{\mathrm{auto}}^m(t)$ 为机器人自主参考映射到主端坐标后的期望位置，$K_h\succeq0$ 和 $D_h\succeq0$ 分别为主端反馈刚度与阻尼。该反馈力不直接作为从端动力学输入，而用于提示操作者当前自主参考方向、几何约束偏差和潜在风险方向。
+
+在几何约束执行层，给定工具尖端期望位置 $x_t^d$，定义工具轴方向
+\begin{equation}
+  n_d=\frac{p_c-x_t^d}{\norm{p_c-x_t^d}} .
+  \label{eq:ch3_nd}
+\end{equation}
+法兰期望位置由正向几何关系给出
+\begin{equation}
+  x_F^d=x_t^d+Ln_d .
+  \label{eq:ch3_flange_pos}
+\end{equation}
+姿态参考通过将法兰工具轴与 $n_d$ 对齐构造。随后将平移控制输入与姿态调节输入组合为广义笛卡尔力，并通过雅可比转置映射为关节力矩
+\begin{equation}
+  \tau=J_F^{\T}\begin{bmatrix}u_\alpha^* & u_\phi^{\T}\end{bmatrix}^{\T},
+  \label{eq:ch3_tau}
+\end{equation}
+其中 $J_F$ 为法兰任务雅可比矩阵，$u_\phi$ 为姿态控制输入。
+
+\section{监督参考与角色仲裁}
+\label{sec:ch3_arbitration}
+
+上一节得到的是给定仲裁权重下的最优反馈形式。实际执行时，权重和参考都随操作者输入、任务进展和风险状态变化，因此本节进一步说明监督参考如何形成，以及仲裁参数如何平滑地选择帕累托工作点。
+
+\subsection{监督参考生成}
+\label{subsec:ch3_ref_generation}
+
+固定 $\alpha_{\mathrm{HR}}$ 时合作微分博弈控制器的求解方法已经给出，下面进一步讨论 $z_{\mathrm{ref},h}$、$z_{\mathrm{ref},r}$ 与 $\alpha_{\mathrm{HR}}$ 如何在线生成。这样安排可以避免将仲裁规则误解为控制律本身：仲裁模块的作用是选择博弈控制器在帕累托前沿上的工作点，而不是替代博弈控制器。
+
+机器人自主参考 $x_{\mathrm{auto}}(t)$ 由任务规划器、候选目标集合和局部环境信息生成，表示机器人在无人干预时希望执行的名义路径。对于操作者局部修正，本章采用基于物理交互的轨迹变形思想，将短时交互信号解释为对未来局部参考轨迹的修正方向\cite{losey2018trajectory}。对于离散目标重定向，采用概率意图识别思想，将候选目标的后验概率作为目标切换依据\cite{jain2020probabilistic}。这些模块在本章中不作为理论创新展开，其输出统一进入监督参考生成接口。
+
+操作者监督参考定义为
+\begin{equation}
+  x_h(t)=\beta(t)x_{\mathrm{tele}}(t)+\bigl(1-\beta(t)\bigr)x_{\mathrm{auto}}(t),
+  \label{eq:ch3_ref_blending_arbitration}
+\end{equation}
+其中 $x_{\mathrm{tele}}(t)$ 为主端直接遥操作参考，$\beta(t)\in[0,1]$ 为参考层融合系数。若
+\begin{equation}
+  d_{\mathrm{dev}}(t)=\norm{x_{\mathrm{tele}}(t)-x_{\mathrm{auto}}(t)},
+  \label{eq:ch3_dev}
+\end{equation}
+则可采用平滑 S 型映射生成原始融合系数
+\begin{equation}
+  \beta_r(t)=\frac{1}{1+\exp[-\gamma_\beta(d_{\mathrm{dev}}(t)-d_{\mathrm{th}})]},
+  \label{eq:ch3_beta_raw}
+\end{equation}
+并通过一阶滤波得到实际使用的 $\beta(t)$：
+\begin{equation}
+  \dot\beta(t)=\lambda_\beta(\beta_r(t)-\beta(t)),\quad \lambda_\beta>0.
+  \label{eq:ch3_beta_filter}
+\end{equation}
+需要强调的是，$\beta(t)$ 只决定监督参考在遥操作参考和自主参考之间如何融合；$\alpha_{\mathrm{HR}}(t)$ 则决定合作博弈代价中人侧目标和机器人侧目标的相对权重。
+
+\subsection{角色仲裁参数设计}
+\label{subsec:ch3_alpha_design}
+
+角色仲裁参数根据主端交互强度、干预持续时间和空间风险在线生成。令
+\begin{equation}
+  F_h(t)=\sat\left(\frac{\norm{f_h(t)}}{F_h^{\max}},0,1\right),
+  \label{eq:ch3_Fh}
+\end{equation}
+表示归一化主端交互强度，其中 $f_h(t)$ 为主端测得或估计的人机交互力，$F_h^{\max}>0$ 为归一化尺度。令 $T_h(t)$ 表示归一化干预持续时间，用于区分有意接管与瞬态抖动。空间风险变量记为
+\begin{equation}
+  D_r(t)=\sat\left(1-\frac{d_{\mathrm{obs}}(t)}{d_{\max}},0,1\right),
+  \label{eq:ch3_Dr}
+\end{equation}
+其中 $d_{\mathrm{obs}}(t)$ 为当前工具到障碍物或风险区域的距离，$d_{\max}>0$ 为风险作用尺度。
+
+绝对意图通道给出当前人侧干预强度估计
+\begin{equation}
+  \lambda_{\mathrm{abs}}(t)=\mathcal{F}_{\mathrm{abs}}(F_h(t),T_h(t),D_r(t)),
+  \label{eq:ch3_abs_fis}
+\end{equation}
+增量意图通道根据输入变化率给出仲裁变化趋势
+\begin{equation}
+  \Delta\lambda_{\mathrm{fis}}(t)=\mathcal{F}_{\mathrm{inc}}(\dot F_h(t),\dot T_h(t),\dot D_r(t)).
+  \label{eq:ch3_inc_fis}
+\end{equation}
+绝对通道判断当前控制权水平，增量通道判断控制权变化方向。二者分离后，系统既能响应持续干预，又能抑制短时震颤造成的权重抖振。
+
+\paragraph{滤波与限幅。}
+\label{subsec:ch3_alpha_filtering}
+
+将模糊推理结果记为观测量 $y_k=\lambda_{\mathrm{abs},k}$ 和趋势输入 $\Delta\lambda_{\mathrm{fis},k}$。构造二维状态
+\begin{equation}
+  \chi_k=\begin{bmatrix}\lambda_k&\dot\lambda_k\end{bmatrix}^{\T},
+  \label{eq:ch3_kf_state}
+\end{equation}
+其中 $\lambda_k$ 表示隐含的人侧干预强度，$\dot\lambda_k$ 表示其变化趋势。离散滤波模型为
+\begin{equation}
+  \chi_{k|k-1}=A_f\chi_{k-1|k-1}+B_f\Delta\lambda_{\mathrm{fis},k},
+  \label{eq:ch3_kf_predict}
+\end{equation}
+\begin{equation}
+  y_k=C_f\chi_k+v_k .
+  \label{eq:ch3_kf_obs}
+\end{equation}
+其中 $v_k$ 为观测噪声。根据残差滑动窗口自适应调节观测噪声协方差后，可得到平滑估计 $\hat\lambda_k$。最终人机仲裁参数采用限幅与一阶滤波生成：
+\begin{equation}
+  \alpha_{r,k}=\sat(\hat\lambda_k,\alpha_{\min},\alpha_{\max}),
+  \label{eq:ch3_alpha_r}
+\end{equation}
+\begin{equation}
+  \alpha_{\mathrm{HR},k}=\alpha_{\mathrm{HR},k-1}+\eta_\alpha(\alpha_{r,k}-\alpha_{\mathrm{HR},k-1}),
+  \quad 0<\eta_\alpha\le 1 .
+  \label{eq:ch3_alpha_filter}
+\end{equation}
+由此，仲裁方案完成了从主端交互特征到帕累托权重的映射。博弈控制器负责求解在给定权重下的最优共享控制律，仲裁器负责在任务执行过程中选择合适的权重。二者逻辑先后清晰，功能边界明确。
+\section{最优性与稳定性分析}
+\label{sec:ch3_theory}
+
+控制律和仲裁机制确定后，还需要说明其闭环性质。以下分析先讨论固定仲裁权重下的名义稳定性，再将权重慢变、扰动和实时实现因素纳入同一稳定性讨论。
+
+\subsection{固定权重下的最优性与稳定性}
+\label{subsec:ch3_fixed_theory}
+
+\begin{assumption}[可检测性与稳定化解]
+\label{ass:ch3_detectability}
+对任意 $\alpha_{\mathrm{HR}}\in[\alpha_{\min},\alpha_{\max}]$，矩阵对 $(Q_c^{1/2},A)$ 可检测，且黎卡提方程\eqref{eq:ch3_are}存在稳定化解 $P_\alpha\succeq0$。
+\end{assumption}
+
+\begin{theorem}[固定仲裁参数下的闭环稳定性]
+\label{thm:ch3_fixed_stability}
+在\cref{ass:ch3_dynamics,ass:ch3_detectability}成立的条件下，对任意固定的 $\alpha_{\mathrm{HR}}\in[\alpha_{\min},\alpha_{\max}]$，采用\cref{thm:ch3_lqr}给出的控制律后，闭环系统
+\begin{equation}
+  \dot{\tilde z}=(A-BK_\alpha)\tilde z,
+  \quad K_\alpha=R_c^{-1}B^{\T}P_\alpha,
+  \label{eq:ch3_closed_fixed}
+\end{equation}
+渐近稳定。
+\end{theorem}
+
+\begin{proof}
+取李雅普诺夫函数
+\begin{equation}
+  V_\alpha(\tilde z)=\tilde z^{\T}P_\alpha\tilde z .
+\end{equation}
+沿闭环系统\eqref{eq:ch3_closed_fixed}求导，有
+\begin{equation}
+  \dot V_\alpha=\tilde z^{\T}\left[(A-BK_\alpha)^{\T}P_\alpha+P_\alpha(A-BK_\alpha)\right]\tilde z .
+\end{equation}
+代入 $K_\alpha=R_c^{-1}B^{\T}P_\alpha$，得到
+\begin{equation}
+  \dot V_\alpha=\tilde z^{\T}\left(A^{\T}P_\alpha+P_\alpha A-2P_\alpha BR_c^{-1}B^{\T}P_\alpha\right)\tilde z .
+\end{equation}
+由黎卡提方程\eqref{eq:ch3_are}可知
+\begin{equation}
+  A^{\T}P_\alpha+P_\alpha A-P_\alpha BR_c^{-1}B^{\T}P_\alpha=-Q_c .
+\end{equation}
+因此
+\begin{equation}
+  \dot V_\alpha=-\tilde z^{\T}Q_c\tilde z-\tilde z^{\T}P_\alpha BR_c^{-1}B^{\T}P_\alpha\tilde z\le0 .
+  \label{eq:ch3_vdot_fixed}
+\end{equation}
+由于 $(A,B)$ 可镇定且 $(Q_c^{1/2},A)$ 可检测，稳定化黎卡提解对应的闭环矩阵 $A-BK_\alpha$ 为赫尔维茨。等价地，\eqref{eq:ch3_vdot_fixed} 中最大不变集只包含原点。由拉萨尔不变性原理可得 $\tilde z(t)$ 渐近收敛到零。定理得证。
+\end{proof}
+
+\subsection{慢变权重下的闭环有界性}
+\label{subsec:ch3_timevarying_theory}
+
+\begin{lemma}[仲裁参数的区间不变性]
+\label{lem:ch3_alpha_invariant}
+若 $\alpha_{\mathrm{HR},0}\in[\alpha_{\min},\alpha_{\max}]$，且 $\alpha_r(t)\in[\alpha_{\min},\alpha_{\max}]$，则由连续形式
+\begin{equation}
+  \dot\alpha_{\mathrm{HR}}(t)=\lambda_\alpha(\alpha_r(t)-\alpha_{\mathrm{HR}}(t)),\quad \lambda_\alpha>0
+  \label{eq:ch3_alpha_ode}
+\end{equation}
+生成的仲裁参数满足 $\alpha_{\mathrm{HR}}(t)\in[\alpha_{\min},\alpha_{\max}]$，对所有 $t\ge0$ 成立。
+\end{lemma}
+
+\begin{proof}
+当 $\alpha_{\mathrm{HR}}=\alpha_{\min}$ 时，由 $\alpha_r(t)\ge\alpha_{\min}$ 可得
+\begin{equation}
+  \dot\alpha_{\mathrm{HR}}=\lambda_\alpha(\alpha_r-\alpha_{\min})\ge0 .
+\end{equation}
+因此在下边界处，向量场指向区间内部或与边界相切，解不会穿过下边界。当 $\alpha_{\mathrm{HR}}=\alpha_{\max}$ 时，由 $\alpha_r(t)\le\alpha_{\max}$ 可得
+\begin{equation}
+  \dot\alpha_{\mathrm{HR}}=\lambda_\alpha(\alpha_r-\alpha_{\max})\le0 .
+\end{equation}
+因此在上边界处，向量场也指向区间内部或与边界相切。根据一维微分方程正不变集判据，闭区间 $[\alpha_{\min},\alpha_{\max}]$ 为系统\eqref{eq:ch3_alpha_ode}的正不变集。引理得证。
+\end{proof}
+
+\begin{lemma}[仲裁参数变化率有界性]
+\label{lem:ch3_alpha_rate}
+在\cref{lem:ch3_alpha_invariant}条件下，仲裁参数变化率满足
+\begin{equation}
+  |\dot\alpha_{\mathrm{HR}}(t)|\le \lambda_\alpha(\alpha_{\max}-\alpha_{\min}) .
+  \label{eq:ch3_alpha_rate_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+由\eqref{eq:ch3_alpha_ode}直接得到
+\begin{equation}
+  |\dot\alpha_{\mathrm{HR}}(t)|=\lambda_\alpha|\alpha_r(t)-\alpha_{\mathrm{HR}}(t)| .
+\end{equation}
+根据\cref{lem:ch3_alpha_invariant}，$\alpha_r(t)$ 与 $\alpha_{\mathrm{HR}}(t)$ 均属于 $[\alpha_{\min},\alpha_{\max}]$，因此
+\begin{equation}
+  |\alpha_r(t)-\alpha_{\mathrm{HR}}(t)|\le \alpha_{\max}-\alpha_{\min} .
+\end{equation}
+将该不等式代入即可得到\eqref{eq:ch3_alpha_rate_bound}。引理得证。
+\end{proof}
+
+\begin{theorem}[慢变仲裁参数下的一致指数稳定性]
+\label{thm:ch3_timevarying_stability}
+设\cref{ass:ch3_dynamics,ass:ch3_detectability}成立。对任意 $\alpha\in[\alpha_{\min},\alpha_{\max}]$，令 $A_{\mathrm{cl}}(\alpha)=A-BK_\alpha$。若存在连续可微矩阵函数 $P(\alpha)=P^{\T}(\alpha)\succ0$ 以及正常数 $\underline p,\bar p,m_c,L_P$，使得
+\begin{equation}
+  \underline p I\preceq P(\alpha)\preceq \bar p I,
+  \label{eq:ch3_P_bounds}
+\end{equation}
+\begin{equation}
+  A_{\mathrm{cl}}^{\T}(\alpha)P(\alpha)+P(\alpha)A_{\mathrm{cl}}(\alpha)\preceq -m_cI,
+  \label{eq:ch3_dissipation_margin}
+\end{equation}
+\begin{equation}
+  \norm{\frac{\partial P(\alpha)}{\partial\alpha}}\le L_P,
+  \label{eq:ch3_P_lipschitz}
+\end{equation}
+且 $|\dot\alpha_{\mathrm{HR}}(t)|\le v_\alpha$。当
+\begin{equation}
+  m_c-v_\alpha L_P>0
+  \label{eq:ch3_slow_condition}
+\end{equation}
+成立时，时变闭环系统
+\begin{equation}
+  \dot{\tilde z}=A_{\mathrm{cl}}(\alpha_{\mathrm{HR}}(t))\tilde z
+  \label{eq:ch3_timevarying_closed}
+\end{equation}
+一致指数稳定。
+\end{theorem}
+
+\begin{proof}
+构造参数依赖李雅普诺夫函数
+\begin{equation}
+  V(\tilde z,\alpha)=\tilde z^{\T}P(\alpha)\tilde z .
+\end{equation}
+由\eqref{eq:ch3_P_bounds}可得
+\begin{equation}
+  \underline p\norm{\tilde z}^2\le V(\tilde z,\alpha)\le \bar p\norm{\tilde z}^2 .
+  \label{eq:ch3_V_bounds}
+\end{equation}
+沿系统\eqref{eq:ch3_timevarying_closed}求导，得到
+\begin{equation}
+  \dot V=\tilde z^{\T}\left[A_{\mathrm{cl}}^{\T}(\alpha)P(\alpha)+P(\alpha)A_{\mathrm{cl}}(\alpha)\right]\tilde z+\tilde z^{\T}\frac{\partial P(\alpha)}{\partial\alpha}\tilde z\dot\alpha .
+\end{equation}
+由\eqref{eq:ch3_dissipation_margin}可得第一项不大于 $-m_c\norm{\tilde z}^2$。由范数不等式和\eqref{eq:ch3_P_lipschitz}可得第二项满足
+\begin{equation}
+  \left|\tilde z^{\T}\frac{\partial P(\alpha)}{\partial\alpha}\tilde z\dot\alpha\right|\le L_Pv_\alpha\norm{\tilde z}^2 .
+\end{equation}
+因此
+\begin{equation}
+  \dot V\le -(m_c-L_Pv_\alpha)\norm{\tilde z}^2 .
+\end{equation}
+令 $\delta_\alpha=m_c-L_Pv_\alpha$。当\eqref{eq:ch3_slow_condition}成立时，$\delta_\alpha>0$，并由\eqref{eq:ch3_V_bounds}得到
+\begin{equation}
+  \dot V\le -\frac{\delta_\alpha}{\bar p}V .
+\end{equation}
+由比较原理可得
+\begin{equation}
+  V(t)\le V(0)\exp\left(-\frac{\delta_\alpha}{\bar p}t\right).
+\end{equation}
+结合\eqref{eq:ch3_V_bounds}，有
+\begin{equation}
+  \norm{\tilde z(t)}\le \sqrt{\frac{\bar p}{\underline p}}\exp\left(-\frac{\delta_\alpha}{2\bar p}t\right)\norm{\tilde z(0)} .
+\end{equation}
+因此闭环系统一致指数稳定。定理得证。
+\end{proof}
+
+\paragraph{实时性与参数敏感性。}
+\label{subsec:ch3_realtime}
+
+上述定理说明，动态仲裁并不应被理解为任意快速切换的模式逻辑。其稳定性依赖两个因素：冻结权重下的闭环稳定裕度和权重变化速率。模糊推理、自适应滤波估计和一阶滤波共同限制 $\alpha_{\mathrm{HR}}$ 的变化率，使共享控制系统具有慢变参数特性。实际实现中，黎卡提方程可在若干离散 $\alpha_{\mathrm{HR}}$ 网格上离线求解，在线阶段根据当前 $\alpha_{\mathrm{HR}}$ 进行插值，或者在控制周期允许时直接求解低维线性二次调节器。主端反馈力、参考融合和 远心运动几何映射均为低维代数运算，适合 $100\,\mathrm{Hz}$ 量级的实验平台实时执行。
+
+\begin{remark}
+\label{rem:ch3_engineering}
+\cref{thm:ch3_timevarying_stability}给出了仲裁参数平滑设计的理论理由。若滤波时间常数过小，系统能够快速响应操作者接管，但 $v_\alpha$ 增大，稳定裕度被消耗；若滤波时间常数过大，闭环更加平稳，但人侧意图响应变慢。因此，$\alpha_{\mathrm{HR}}$ 的更新速率应作为响应速度与闭环稳定裕度之间的协同设计参数。
+\end{remark}
+
+\section{仿真结果与分析}
+\label{sec:ch3_simulation}
+
+\subsection{仿真设置}
+\label{subsec:ch3_sim_task}
+
+为验证所提意图驱动合作博弈共享控制方法，本章设计刚性几何约束下的结构化目标转移仿真。该实验场景模拟长工具经固定通道进入操作区域的过程，工具尖端需要依次到达多个空间目标点，同时保持工具轴线经过远心运动约束点，并避开任务空间中的虚拟障碍物。操作者输入用于表达局部修正、目标重定向或临时接管意图，机器人侧则根据自主参考轨迹维持连续运动。该场景能够同时考察人机意图仲裁、远心运动约束保持、末端跟踪精度和交互负荷。
+
+对比方法设置为四组：博弈控制 + 模糊自适应滤波、博弈控制 + S 型映射、预测控制 + 模糊自适应滤波 和 预测控制 + S 型映射。其中博弈控制表示本章的合作博弈控制器，预测控制表示有限时域预测控制基线；模糊自适应滤波与 S 型映射分别表示动态仲裁参数估计方式。四组方法使用相同的任务目标、障碍物位置、几何约束点和参考生成模块，以便重点比较控制器主干和仲裁策略的影响。
+
+\paragraph{评价指标与参数设置。}
+\label{subsec:ch3_metrics}
+
+评价指标放置在仿真结果部分，而不提前置于问题描述中。这样能够避免方法章节的目标定义和实验评价混杂。本文采用以下指标：平均几何约束误差 $\bar e_{\mathrm{gc}}$、平均末端误差 $\bar e_{\mathrm{ee}}$、轨迹加加速度均方根、平均障碍距离、控制线力和控制力矩。若离散采样点数为 $N$，末端误差指标为
+\begin{equation}
+  E_{\mathrm{ee}}^{\mathrm{RMS}}=\sqrt{\frac{1}{N}\sum_{k=1}^{N}\norm{x_{t,k}-x_{t,k}^{d}}^2} .
+  \label{eq:ch3_ee_metric}
+\end{equation}
+几何约束误差均方根指标为
+\begin{equation}
+  E_{\mathrm{gc}}^{\mathrm{RMS}}=\sqrt{\frac{1}{N}\sum_{k=1}^{N}e_{\mathrm{gc},k}^2} .
+  \label{eq:ch3_gc_metric}
+\end{equation}
+轨迹平滑性由加加速度指标衡量：
+\begin{equation}
+  J_{\mathrm{jerk}}=\sqrt{\frac{1}{N}\sum_{k=1}^{N}\norm{\frac{x_{k}-3x_{k-1}+3x_{k-2}-x_{k-3}}{\Delta t^3}}^2} .
+  \label{eq:ch3_jerk_metric}
+\end{equation}
+其中 $\Delta t$ 为采样周期。仿真控制频率设置为 $100\,\mathrm{Hz}$，几何约束点设置为 $p_c=[0.3,0,0.235]^{\T}\,\mathrm{m}$，工具长度为 $0.525\,\mathrm{m}$，虚拟障碍物中心为 $[0.3,-0.05,0.05]^{\T}\,\mathrm{m}$、半径为 $0.03\,\mathrm{m}$。每组方法在相同初始状态、目标点序列、障碍物位置和约束几何下重复运行，并统计误差、交互力、仲裁变量和控制输入等指标的均值与标准差。
+
+\begin{table}[H]
+\centering
+\caption{第三章刚性约束共享控制仿真参数}
+\label{tab:ch3_sim_params}
+\begin{tabular}{lll}
+\toprule
+类别 & 参数 & 取值或说明 \\
+\midrule
+任务空间阻抗 & $M_x,D_x,K_x$ & $\diag(10,10,10)$, $\diag(300,300,300)$, $\diag(100,100,100)$ \\
+人机代价 & $R_h,R_r$ & $\diag(0.001,0.001,0.001)$, $\diag(0.002,0.002,0.002)$ \\
+状态权重 & $Q_h,Q_r$ & 位置误差权重大于速度误差权重 \\
+控制频率 & $f_c$ & $100\,\mathrm{Hz}$ \\
+几何约束 & $p_c,L$ & $[0.3,0,0.235]^{\T}\,\mathrm{m}$, $0.525\,\mathrm{m}$ \\
+障碍物 & $p_o,r_o$ & $[0.3,-0.05,0.05]^{\T}\,\mathrm{m}$, $0.03\,\mathrm{m}$ \\
+仲裁变量 & $F_h,T_h,D_r$ & 主端交互强度、持续时间、空间风险 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{结果分析}
+\label{subsec:ch3_results}
+
+\begin{table}[H]
+\centering
+\caption{第三章刚性几何约束任务四种共享控制方法的仿真结果比较}
+\label{tab:ch3_sim_results}
+\scriptsize
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lcccc}
+\toprule
+指标 & 博弈+模糊滤波 & 博弈+S型映射 & 预测+模糊滤波 & 预测+S型映射 \\
+\midrule
+平均几何约束误差/mm & $3.03\pm0.51$ & $3.06\pm0.48$ & $4.51\pm1.00$ & $4.88\pm1.05$ \\
+平均末端误差/mm & $5.25\pm0.55$ & $5.25\pm0.38$ & $7.43\pm1.21$ & $7.66\pm0.97$ \\
+平均交互力范数/N & $0.194\pm0.106$ & $0.258\pm0.119$ & $0.134\pm0.128$ & $0.133\pm0.068$ \\
+力平滑性指标 & $2.79{\times}10^{-3}\pm1.05{\times}10^{-3}$ & $3.60{\times}10^{-3}\pm2.29{\times}10^{-3}$ & $2.75{\times}10^{-3}\pm1.40{\times}10^{-3}$ & $2.97{\times}10^{-3}\pm1.46{\times}10^{-3}$ \\
+轨迹加加速度均方根 & $4.02{\times}10^{-4}\pm2.30{\times}10^{-4}$ & $5.14{\times}10^{-4}\pm4.05{\times}10^{-4}$ & $1.29{\times}10^{-3}\pm6.51{\times}10^{-4}$ & $1.44{\times}10^{-3}\pm6.96{\times}10^{-4}$ \\
+平均障碍距离/mm & $54.98\pm5.40$ & $53.06\pm4.88$ & $58.79\pm7.99$ & $53.93\pm6.48$ \\
+\bottomrule
+\end{tabular}
+}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/ch3_ch4/ch3_significance_4method.png}
+\caption{第三章刚性几何约束任务四种共享控制方法的统计分布与显著性比较}
+\label{fig:ch3_significance_4method}
+\end{figure}
+
+由\cref{tab:ch3_sim_results}和\cref{fig:ch3_significance_4method}可见，在相同任务目标和几何约束条件下，合作博弈控制器在几何约束误差、末端误差和轨迹平滑性方面均优于预测控制基线。以模糊自适应滤波仲裁为例，博弈控制的平均几何约束误差为 $3.03\,\mathrm{mm}$，预测控制为 $4.51\,\mathrm{mm}$；平均末端误差分别为 $5.25\,\mathrm{mm}$ 和 $7.43\,\mathrm{mm}$。箱线图进一步显示，预测控制两组方法的误差分布整体上移且离散程度更大，说明其在目标转移和人侧干预叠加时更容易产生约束偏离。配对显著性分析显示，博弈+模糊滤波与预测+模糊滤波在几何约束误差、末端误差、平均交互力和轨迹加加速度上均具有显著差异，而力平滑性差异不显著。这说明闭式博弈反馈律与远心运动几何映射结合后，能够在不牺牲力平滑性的前提下提高约束保持和末端跟踪性能。
+
+从仲裁方式看，博弈+模糊滤波与博弈+S 型映射的几何约束误差和末端误差接近，但模糊滤波的平均交互力更低。其原因在于模糊自适应滤波同时利用主端交互强度、干预持续时间和空间风险信息，能够抑制短时输入脉冲造成的仲裁突变。该结果也为第四章的柔性接触仿真提供了对照：第三章的刚性约束任务已经证明动态仲裁有利于人机意图切换和远心运动合规，但它尚未显式处理持续接触力和力安全边界。因此第四章进一步将仲裁对象从人机意图权重扩展为力--位任务优先级，并在变刚度接触扫描中检验力误差、位置误差和几何约束误差的联合表现。
+
+\section{本章小结}
+\label{sec:ch3_summary}
+
+本章针对刚性几何约束操作场景，提出了一种意图驱动的合作博弈共享控制方法。首先，将任务抽象为固定几何通道约束下的人机监督共享控制问题，并明确区分机器人自主参考、人侧监督参考、参考层融合系数 $\beta(t)$ 和人机仲裁参数 $\alpha_{\mathrm{HR}}(t)$。随后，采用主端交互强度、干预持续时间和空间风险构造动态仲裁变量，并通过双通道模糊推理和滤波估计抑制短时扰动造成的权重抖振。在控制律层面，本章将人侧目标和机器人侧目标建模为合作博弈中的两个目标，通过帕累托加权和黎卡提方程获得闭式最优反馈控制律，并通过工具到法兰几何映射保证刚性通道约束的可执行性。
+
+理论分析表明，在固定仲裁参数下，所提控制律可转化为标准二次型最优控制问题，闭环系统渐近稳定；在慢变仲裁参数下，只要参数变化率不超过冻结系统稳定裕度允许范围，闭环系统保持一致指数稳定。仿真结果进一步说明，该方法能够降低几何约束误差、末端跟踪误差、轨迹加加速度 和控制输入强度。
+
+本章关注的核心矛盾是人类监督意图与机器人自主目标之间的协调。下一章将研究另一类更强的耦合问题：当工具与柔性环境持续接触时，控制器不仅需要保持几何约束，还需要在位置跟踪、接触力调节和力安全边界之间动态权衡。为此，下一章将引入含残差项的力--位增广系统、折扣型帕累托控制律以及交互力安全裕度驱动的动态仲裁机制。

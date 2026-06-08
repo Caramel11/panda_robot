@@ -1,0 +1,17 @@
+% !TeX program = xelatex
+\documentclass[UTF8,zihao=-4,openany]{ctexbook}
+\input{../setup/preamble.tex}
+\addbibresource{../refs/references.bib}
+\begin{document}
+\frontmatter
+\title{chapter4 单章编译预览}
+\author{ }
+\date{\today}
+\maketitle
+\tableofcontents
+\mainmatter
+\refstepcounter{chapter}\label{chap:preliminaries}
+\setcounter{chapter}{3}
+\input{../chapters/chapter4.tex}
+\printbibliography
+\end{document}

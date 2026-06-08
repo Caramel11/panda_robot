@@ -1,0 +1,40 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "LaTeX: build main_all.tex",
+            "type": "shell",
+            "command": "latexmk",
+            "args": [
+                "-xelatex",
+                "-interaction=nonstopmode",
+                "-file-line-error",
+                "-synctex=1",
+                "-outdir=compiled_pdfs",
+                "main_all.tex"
+            ],
+            "options": {
+                "cwd": "/home/liu/franka_ws_1101/src/panda_robot/tests/ch2_ch3_ch4_release"
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "LaTeX: clean main_all.tex",
+            "type": "shell",
+            "command": "latexmk",
+            "args": [
+                "-C",
+                "-outdir=compiled_pdfs",
+                "main_all.tex"
+            ],
+            "options": {
+                "cwd": "/home/liu/franka_ws_1101/src/panda_robot/tests/ch2_ch3_ch4_release"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

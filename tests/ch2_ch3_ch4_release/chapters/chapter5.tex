@@ -1,0 +1,231 @@
+% !TeX root = ../main_ustc.tex
+\chapter{融合控制方法与实物实验验证方案}
+\label{chap:ch5_fusion_experiment}
+
+\section{融合控制总体思路}
+\label{sec:ch5_motivation}
+
+第三章围绕刚性几何约束任务，解决了人类监督意图与机器人自主目标之间的动态仲裁问题；第四章进一步面向柔性接触任务，研究了位置跟踪、接触力调节和力安全边界之间的任务级权衡。两章方法分别强调了不同层面的协同：第三章侧重人机角色分配，第四章侧重力--位任务优先级分配。实际约束操作任务通常同时包含这两类矛盾。例如，操作者需要通过主端给出目标修正或局部干预，机器人需要保持长工具远心运动约束，并在工具尖端与柔性组织或环境接触时维持期望接触力。因此，有必要将两章方法融合为统一的人机--力位--几何约束协同控制框架，并通过实物实验验证其可执行性和安全性。
+
+本章拟构造一种双层动态仲裁的融合控制方法。外层以第三章的人机仲裁参数 $\alpha_{\mathrm{HR}}$ 描述操作者意图与机器人自主目标之间的权重分配；内层以第四章的力--位优先级 $\alpha_{\mathrm{FP}}$ 描述位置跟踪与接触力调节之间的权重分配。二者共同作用于统一的合作博弈代价函数，使控制器能够在操作者干预增强时及时响应人侧意图，在接触力接近安全边界时提高力调节优先级，并始终通过远心运动几何映射保持工具通道合规。
+
+\begin{figure}[H]
+\centering
+\fbox{%
+\begin{minipage}{0.92\textwidth}
+\centering
+\begin{tabular}{c}
+主端交互信息、机器人状态、接触力反馈 \\
+$\Downarrow$ \\
+人机意图仲裁 $\alpha_{\mathrm{HR}}$ \quad 与 \quad 力安全裕度仲裁 $\alpha_{\mathrm{FP}}$ \\
+$\Downarrow$ \\
+统一增广状态与多目标合作博弈代价函数 \\
+$\Downarrow$ \\
+融合反馈控制律与远心运动几何映射 \\
+$\Downarrow$ \\
+关节力矩/速度指令输出，完成约束接触操作
+\end{tabular}
+\end{minipage}}
+\caption{三、四章方法融合后的双层动态仲裁控制框架}
+\label{fig:ch5_fusion_framework}
+\end{figure}
+
+\section{融合控制方法设计}
+\label{sec:ch5_problem}
+
+考虑机械臂末端安装长工具并通过固定通道约束点进入操作区域。设工具尖端位置为 $x_t\in\mathbb{R}^3$，期望扫描轨迹为 $x_d$，工具轴线相对远心运动约束点的几何误差为 $e_{\mathrm{gc}}$，接触方向上的实际力为 $F$，期望力为 $F_d$。定义位置误差、力误差和几何约束误差为
+\begin{equation}
+  e_x=x_t-x_d,\quad e_f=F-F_d,\quad e_{\mathrm{gc}}=d(p_c,\ell_t),
+  \label{eq:ch5_errors}
+\end{equation}
+其中 $p_c$ 为远心运动约束点，$\ell_t$ 为工具轴线，$d(\cdot,\cdot)$ 表示点到直线距离。为增强力误差的低频消除能力，引入力误差泄漏积分
+\begin{equation}
+  \dot I_f=e_f-\lambda_I I_f,\quad \lambda_I>0 .
+  \label{eq:ch5_force_integral}
+\end{equation}
+融合控制的增广状态选取为
+\begin{equation}
+  \eta=\begin{bmatrix} e_x^{\T} & \dot e_x^{\T} & e_f & I_f & e_{\mathrm{gc}} \end{bmatrix}^{\T}.
+  \label{eq:ch5_aug_state}
+\end{equation}
+该状态同时包含第三章关注的几何约束与末端跟踪误差，以及第四章关注的接触力误差和力误差积分项。
+
+融合控制目标为：在操作者干预、环境刚度变化和接触力扰动同时存在的情况下，使 $e_x$、$e_f$ 和 $e_{\mathrm{gc}}$ 保持有界并尽可能收敛到小邻域，同时保证接触力满足安全边界
+\begin{equation}
+  F_{\min}\le F(t)\le F_{\max}.
+  \label{eq:ch5_force_safe_bound}
+\end{equation}
+
+\subsection{双层动态仲裁机制}
+\label{sec:ch5_arbitration}
+
+融合方法包含两类仲裁变量。第一类是人机仲裁参数 $\alpha_{\mathrm{HR}}\in[0,1]$，用于描述机器人自主目标与人类监督目标之间的权衡。该参数由主端交互强度、干预持续时间和空间风险共同决定。当操作者输入较弱且任务风险较低时，机器人自主目标权重较高；当操作者持续施加强干预或目标附近风险升高时，人侧监督目标权重增大。
+
+第二类是力--位优先级参数 $\alpha_{\mathrm{FP}}\in[0,1]$，用于描述位置跟踪与接触力调节之间的权衡。定义归一化力安全裕度
+\begin{equation}
+  \rho_F=\min\left\{\frac{F-F_{\min}}{F_d-F_{\min}},\frac{F_{\max}-F}{F_{\max}-F_d}\right\}.
+  \label{eq:ch5_force_margin}
+\end{equation}
+当 $\rho_F$ 较大时，接触力位于安全区间中部，控制器可提高位置跟踪权重；当 $\rho_F$ 减小时，接触力接近安全边界，控制器应提高力调节权重并降低扫描推进趋势。为避免权重抖振，采用一阶滤波得到平滑优先级：
+\begin{equation}
+  \dot\alpha_{\mathrm{FP}}=-\lambda_F\left(\alpha_{\mathrm{FP}}-\alpha_{\mathrm{FP}}^{\star}(\rho_F)\right),
+  \quad \lambda_F>0 .
+  \label{eq:ch5_fp_filter}
+\end{equation}
+
+双层仲裁的关键在于二者不互相替代。$\alpha_{\mathrm{HR}}$ 决定共享参考来自人侧还是机器人侧，$\alpha_{\mathrm{FP}}$ 决定融合参考在执行阶段更重视位置还是接触力。实际实现时，可先由 $\alpha_{\mathrm{HR}}$ 生成共享期望轨迹
+\begin{equation}
+  x_s=(1-\alpha_{\mathrm{HR}})x_r+\alpha_{\mathrm{HR}}x_h,
+  \label{eq:ch5_shared_reference}
+\end{equation}
+再由 $\alpha_{\mathrm{FP}}$ 调整控制器对 $x_s$ 与 $F_d$ 的相对权重。
+
+\subsection{统一合作博弈控制律}
+\label{sec:ch5_fusion_control}
+
+为统一描述三、四章目标，构造机器人侧、人侧和力安全侧的加权代价。机器人侧偏重自主轨迹跟踪与远心运动约束：
+\begin{equation}
+  J_r=\int_0^\infty \left(\eta^{\T}Q_r\eta+u^{\T}R_r u\right)\dd t .
+  \label{eq:ch5_robot_cost}
+\end{equation}
+人侧偏重操作者修正目标的响应：
+\begin{equation}
+  J_h=\int_0^\infty \left(\eta^{\T}Q_h\eta+u^{\T}R_h u\right)\dd t .
+  \label{eq:ch5_human_cost}
+\end{equation}
+力安全侧偏重力误差、力误差积分和边界裕度：
+\begin{equation}
+  J_f=\int_0^\infty \left(q_f e_f^2+q_I I_f^2+q_b B(F)+u^{\T}R_f u\right)\dd t ,
+  \label{eq:ch5_force_cost}
+\end{equation}
+其中 $B(F)$ 为接触力接近安全边界时快速增大的势函数，例如
+\begin{equation}
+  B(F)=\frac{1}{(F-F_{\min})^2+\epsilon_b}+\frac{1}{(F_{\max}-F)^2+\epsilon_b}.
+  \label{eq:ch5_barrier_like_force}
+\end{equation}
+
+融合后的总目标函数写为
+\begin{equation}
+  J=(1-\alpha_{\mathrm{HR}})J_r+\alpha_{\mathrm{HR}}J_h
+  +(1-\alpha_{\mathrm{FP}})J_f+\alpha_{\mathrm{FP}}J_x,
+  \label{eq:ch5_fused_cost}
+\end{equation}
+其中 $J_x$ 表示位置跟踪子目标。该式体现了两层仲裁的分工：$\alpha_{\mathrm{HR}}$ 调整人机目标权重，$\alpha_{\mathrm{FP}}$ 调整力--位任务权重。对线性化增广系统
+\begin{equation}
+  \dot\eta=A\eta+B u+w
+  \label{eq:ch5_linearized_aug}
+\end{equation}
+可得到参数化黎卡提方程
+\begin{equation}
+  A^{\T}P+PA-PBR^{-1}B^{\T}P+Q(\alpha_{\mathrm{HR}},\alpha_{\mathrm{FP}})=0,
+  \label{eq:ch5_riccati}
+\end{equation}
+并给出融合反馈律
+\begin{equation}
+  u^{\star}=-R^{-1}B^{\T}P(\alpha_{\mathrm{HR}},\alpha_{\mathrm{FP}})\eta.
+  \label{eq:ch5_feedback_law}
+\end{equation}
+最后通过工具--法兰几何映射和机械臂雅可比矩阵将 $u^{\star}$ 转换为关节空间控制输入。若采用离散优先级网格离线求解 $P$，在线阶段只需根据 $\alpha_{\mathrm{HR}}$ 和 $\alpha_{\mathrm{FP}}$ 查询或插值反馈增益，从而满足实时控制需求。
+
+\subsection{稳定性与安全性设计条件}
+\label{sec:ch5_stability_safety}
+
+融合方法的稳定性依赖三个条件。第一，在冻结仲裁参数 $(\alpha_{\mathrm{HR}},\alpha_{\mathrm{FP}})$ 下，闭环矩阵
+\begin{equation}
+  A_{\mathrm{cl}}=A-BR^{-1}B^{\T}P
+  \label{eq:ch5_acl}
+\end{equation}
+应为赫尔维茨矩阵。第二，两个仲裁参数的变化率应受到限制，即
+\begin{equation}
+  |\dot\alpha_{\mathrm{HR}}|\le v_H,\quad |\dot\alpha_{\mathrm{FP}}|\le v_F,
+  \label{eq:ch5_rate_bound}
+\end{equation}
+且 $v_H$、$v_F$ 不超过冻结闭环稳定裕度可容许范围。第三，接触力边界势函数和实验层限幅策略共同约束 $F$，使控制输入在力接近边界时具有退让趋势。
+
+在上述条件下，可构造参数依赖李雅普诺夫函数
+\begin{equation}
+  V(\eta,\alpha_{\mathrm{HR}},\alpha_{\mathrm{FP}})
+  =\eta^{\T}P(\alpha_{\mathrm{HR}},\alpha_{\mathrm{FP}})\eta .
+  \label{eq:ch5_lyapunov}
+\end{equation}
+若权重变化足够平滑，则沿闭环轨迹有
+\begin{equation}
+  \dot V\le -c_1\norm{\eta}^2+c_2\norm{w}^2,
+  \label{eq:ch5_iss_bound}
+\end{equation}
+其中 $w$ 表示环境建模误差、力测量噪声和操作者输入扰动。该不等式说明融合闭环系统对有界扰动具有输入到状态稳定意义下的有界性。实物实验阶段还应叠加关节速度、关节力矩、接触力、远心运动误差和工作空间边界限幅，以保证算法验证过程的安全性。
+
+\section{实物实验验证方案}
+\label{sec:ch5_real_experiment}
+
+为使融合方法具备可验证性，实验设计从平台构成、任务流程、对比方法、评价指标和安全预案五个方面展开。各部分共同服务于同一目标，即检验双层仲裁方法在真实远心运动约束和柔性接触条件下的综合表现。
+
+\subsection{实验平台与任务}
+\label{subsec:ch5_platform}
+
+实物实验平台建议由七自由度机械臂、长工具末端、主端交互设备、力/力矩传感器、固定远心运动约束参考点和柔性接触环境组成。机械臂用于执行融合控制律输出，主端设备用于给出操作者修正意图，力/力矩传感器用于测量工具尖端接触力，柔性环境用于模拟不同刚度区域。实验前需要标定工具长度、工具尖端相对法兰的位姿、远心运动约束点位置、力传感器零偏和接触方向。
+
+\paragraph{实验任务。}
+\label{subsec:ch5_task}
+
+实验任务设计为“远心运动约束下的人机协同恒力扫描”。机械臂初始时使工具尖端靠近柔性环境表面，随后进入扫描阶段。机器人自主目标为沿预设轨迹完成恒速扫描，操作者可在扫描过程中通过主端设备给出横向修正或目标重定向，柔性环境沿扫描方向设置低刚度区和高刚度区。实验要求控制器在完成扫描轨迹的同时维持远心运动约束，并将接触力保持在安全范围内。
+
+实验可分为三个阶段：
+\begin{enumerate}
+  \item 自由空间接近阶段：机械臂以低速移动到接触前位置，验证远心运动约束和主端意图响应。
+  \item 稳定接触建立阶段：工具尖端缓慢接触柔性环境，控制器逐步建立期望接触力。
+  \item 人机协同扫描阶段：机器人执行恒力扫描，操作者在指定区间施加干预，环境刚度发生变化，记录融合控制器的响应。
+\end{enumerate}
+
+\subsection{对比方法与评价指标}
+\label{subsec:ch5_compare_methods}
+
+为验证融合控制方法的必要性，建议设置以下对比组：
+\begin{enumerate}
+  \item 固定人机权重 + 固定力--位权重：作为无动态仲裁基线。
+  \item 动态人机仲裁 + 固定力--位权重：验证第三章方法在接触任务中的表现。
+  \item 固定人机权重 + 动态力--位仲裁：验证第四章方法在人机干预场景中的表现。
+  \item 双层动态仲裁融合方法：验证本文第五章方法的综合性能。
+\end{enumerate}
+四组方法应使用相同的初始位姿、扫描路径、期望接触力、安全边界和标准化操作者干预提示，以保证对比公平。
+
+\paragraph{评价指标。}
+\label{subsec:ch5_metrics}
+
+实验评价指标包括五类。第一类是任务精度指标，包括末端位置均方根误差、扫描终点误差和轨迹完成时间。第二类是远心运动合规指标，包括几何约束均方根误差、峰值约束误差和超过允许约束误差阈值的持续时间。第三类是力安全指标，包括力均方根误差、峰值力误差、上/下边界违反次数和力恢复时间。第四类是人机协同指标，包括操作者干预后的响应延迟、共享参考变化平滑性和主端交互力峰值。第五类是控制实时性与执行平滑性指标，包括单周期计算时间、关节速度峰值、关节力矩峰值和轨迹加加速度。
+
+\begin{table}[H]
+\centering
+\caption{第五章实物实验评价指标}
+\label{tab:ch5_real_metrics}
+\begin{tabular}{lll}
+\toprule
+类别 & 指标 & 目的 \\
+\midrule
+任务精度 & 位置误差、终点误差、完成时间 & 验证扫描任务完成能力 \\
+几何合规 & 远心运动均方根误差、峰值误差 & 验证通道约束保持能力 \\
+力安全 & 力误差、越界次数、恢复时间 & 验证柔性接触安全性 \\
+人机协同 & 干预响应延迟、主端交互强度 & 验证操作者意图响应能力 \\
+实时平滑 & 计算时间、力矩峰值、加加速度 & 验证工程可执行性 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{实验流程与安全预案}
+\label{subsec:ch5_protocol}
+
+每次实验前先完成工具标定、力传感器清零和空载运动检查。随后在低速模式下执行自由空间远心运动验证，确认几何约束误差和工作空间边界均满足要求后，再进入接触实验。接触建立阶段应采用较小期望力和较低速度，待力信号稳定后逐步切换到正式参数。正式实验中，每组方法至少重复多次，并随机化方法顺序，以降低操作者适应性和环境漂移对结果的影响。
+
+安全预案包括四级保护：第一，接触力超过硬安全阈值时立即停止扫描并保持当前位置；第二，远心运动误差超过阈值时暂停推进并执行约束恢复；第三，关节速度或力矩接近限制时降低控制增益和扫描速度；第四，操作者可通过急停或主端按钮随时终止实验。所有实验数据应记录时间戳、机器人状态、工具尖端位置、接触力、仲裁参数、控制输入和安全状态，便于后续复现实验过程并进行统计分析。
+
+\section{预期结果与分析}
+\label{sec:ch5_expected}
+
+预期双层动态仲裁融合方法应在三方面优于单一仲裁方法。首先，在操作者干预明显时，融合方法能够通过 $\alpha_{\mathrm{HR}}$ 快速响应人侧意图，使共享参考向操作者目标平滑过渡；在操作者干预减弱后，系统逐渐恢复机器人自主扫描目标。其次，在进入高刚度接触区域或接触力接近安全边界时，融合方法能够通过 $\alpha_{\mathrm{FP}}$ 提高力调节优先级，减少力越界次数和峰值力误差。最后，在远心运动约束存在时，融合方法通过几何误差权重和工具映射保持通道合规，使几何约束误差维持在可接受范围内。
+
+实验分析应避免仅比较单一误差最小值，而应综合观察位置、力、几何约束和人机交互四类指标之间的折中关系。若融合方法相较单一仲裁方法能够在不显著增加位置误差和控制输入的前提下降低力越界次数，同时保持较低远心运动误差，则说明三、四章方法的融合具有实际约束接触操作价值。
+
+\section{本章小结}
+\label{sec:ch5_summary}
+
+本章提出了三、四章方法的融合思路，将第三章的人机意图仲裁与第四章的力--位安全仲裁统一到双层动态仲裁框架中。通过构造包含位置误差、力误差、力误差积分和远心运动几何误差的增广状态，建立了多目标合作博弈代价函数，并给出了参数化反馈控制律和稳定性、安全性设计条件。在实验验证方面，本章设计了远心运动约束下的人机协同恒力扫描实物实验方案，明确了实验平台、任务流程、对比方法、评价指标和安全预案。该方案为后续从仿真验证走向真实约束接触操作提供了完整实验路径。
