@@ -42,7 +42,7 @@ from src.alpha_scheduler_gt import (
     FixedAlphaScheduler
 )
 from src.env_estimator import EnvironmentEstimator
-from src.utils import VirtualStiffnessSurface, DataLogger
+from src.utils import VirtualStiffnessSurface, DataLogger, ContactDeltaDotEstimator
 from src.leaky_integrator import LeakyIntegrator
 from src.robot_interface import (
     update_robot_state, safe_move_to_joint_position,
@@ -57,41 +57,64 @@ class Config:
     力目标、安全边界、控制频率和接触稳定判据都集中放在这里，便于复现实验。
     """
 
-    # 扫描轨迹: tool 端沿 x 方向匀速从 scan_start_x 运动到 scan_end_x。
-    scan_start_x = 0.40
-    scan_end_x   = 0.48
-    scan_y       = 0.0
-    scan_z       = 0.298
-    # approach_z 是虚拟表面高度；tool 低于该高度时产生压入量。
+    # 扫描几何参数，单位均为 m；no-RCM 只约束 tool 端位置。
+    # Phase 2 中 x 从 scan_start_x 匀速走到 scan_end_x，y/z 为名义扫描线。
+    scan_start_x = 0.40      # 扫描起点 x
+    scan_end_x   = 0.48      # 扫描终点 x
+    scan_y       = 0.0       # 扫描线 y 坐标
+    scan_z       = 0.298     # 固定 z 扫描参考；关闭力一致轨迹时使用
+    # approach_z 是虚拟表面高度；tool 低于该高度时虚拟环境产生压入量。
     approach_z   = 0.30
-    scan_vx      = 0.002
+    scan_vx      = 0.0015    # Phase 2 沿 x 的扫描速度, m/s；降低以减小动态滞后和力抖动
+    force_consistent_scan_z = True  # 根据 F_desired/K_env 生成 z 参考，避免力/位目标冲突
+    scan_z_min   = 0.2964    # 力一致 z 参考下限，防止低刚度估计导致过深压入
+    scan_z_max   = 0.2984    # 力一致 z 参考上限，保留少量高刚度/过渡裕度
+    scan_z_stiffness_floor = 250.0  # 生成 z 参考时使用的最小刚度, N/m
 
-    # 力目标与安全边界，供 online_priority 等 alpha 调度器使用。
-    F_desired    = 1.0
-    F_min        = 0.3
-    F_max        = 2.0
-    force_axis   = 2
+    # Phase 1 接近参数；接近阶段固定 alpha=1，只做位置主导下探。
+    approach_speed = 0.007   # 下探参考速度, m/s；原 0.005，适度加快接近
 
-    # 分段环境参数: (x_start, x_end, K_e, B_e)。
+    # 力目标与安全边界，单位 N；供 alpha 调度器和力误差归一化使用。
+    F_desired    = 1.0       # 期望法向接触力
+    F_min        = 0.3       # 低力边界，低于该值更偏向力控补偿
+    F_max        = 2.0       # 高力边界，高于该值触发更保守的调度
+    force_axis   = 2         # 力控制轴，2 表示 z 轴
+
+    # 虚拟分段环境参数: (x_start, x_end, K_e, B_e)。
+    # K_e 单位 N/m，B_e 单位 Ns/m，用于 Gazebo/mock 接触力与估计器对照。
     stiffness_zones = [
-    (0.40, 0.44, 300, 5),    # 低刚度
-    (0.44, 0.48, 500, 8),    # 高刚度
+        (0.40, 0.44, 300, 5),    # 低刚度
+        (0.44, 0.48, 500, 8),    # 高刚度
     ]
 
-    # 控制周期与泄漏积分器参数。
-    ctrl_rate = 100
+    # 控制周期与泄漏积分器参数；eps 越大，积分记忆衰减越快。
+    ctrl_rate = 100         # 主控制循环频率, Hz
     dt = 1.0 / ctrl_rate
-    eps_r = 1.0
-    eps_f = 2.0
-    # 接触检测和接触稳定窗口参数。
-    settle_time = 2.0
-    contact_force_threshold = 0.3
-    contact_z_tolerance = 0.001
-    contact_settle_time = 1.0
-    contact_stable_z_std = 0.0003
-    contact_stable_force_std = 0.05
-    contact_stable_force_slope = 0.20
-    contact_force_blend_time = 0.5
+    eps_r = 1.0             # 位置误差积分泄漏系数
+    eps_f = 2.0             # 力误差积分泄漏系数
+
+    # 接触检测与稳定判据。Phase 1 先下探，满足力/高度条件后，
+    # Phase 1.5 等力和位置波动收敛，正式数据从 Phase 2 才开始记录。
+    settle_time = 2.0                  # 初始关节位姿到达后的静置时间, s
+    contact_force_threshold = 0.3      # 判定触碰表面的最小接触力, N
+    contact_z_tolerance = 0.001        # 接触高度判定容差, m
+    contact_settle_time = 1.0          # 接触稳定滑动窗口长度, s
+    contact_stable_z_std = 0.0003      # 稳定窗口内 z 标准差阈值, m
+    contact_stable_force_std = 0.05    # 稳定窗口内力标准差阈值, N
+    contact_stable_force_slope = 0.20  # 稳定窗口首尾力变化率阈值, N/s
+    contact_force_blend_time = 0.5     # 接触后力控从 0 平滑引入的时间, s
+    contact_delta_dot_filter_tau = 0.05  # 压入速度低通时间常数, s
+    contact_delta_dot_limit = 0.02       # 压入速度限幅, m/s
+
+    # 接触调整阶段，不写入实验数据；用于滤掉刚接触瞬态震荡。
+    adjustment_min_time = 1.0          # 调整阶段最短持续时间, s
+    adjustment_timeout = 8.0           # 调整阶段最长等待时间, s
+    adjustment_stable_window = 0.8     # 调整稳定统计窗口, s
+    adjustment_force_error = 0.15      # 允许的稳态力误差, N
+    adjustment_pos_std = 0.0005        # 允许的位置误差标准差, m
+
+    # Phase 3 退回初始关节角的超时；退回使用小步关节位置命令并打印进度。
+    retreat_timeout = 25.0
 
 
 def contact_delta_from_surface(cfg, z):
@@ -101,6 +124,21 @@ def contact_delta_from_surface(cfg, z):
     返回 approach_z - z。该函数是虚拟环境力计算的唯一压入量来源。
     """
     return max(0.0, cfg.approach_z - z)
+
+
+def scan_z_reference(cfg, venv, x):
+    """返回当前 x 位置的扫描 z 参考。
+
+    在虚拟环境已知时，用 Kelvin-Voigt 静态关系 F=K(x)delta 反推
+    delta_ref=F_desired/K(x)，让位置目标和恒力目标物理一致。若关闭该模式
+    或没有虚拟环境，则退回固定 cfg.scan_z。
+    """
+    if not cfg.force_consistent_scan_z or venv is None:
+        return float(cfg.scan_z)
+    K_ref, _ = venv.get_stiffness(float(x))
+    K_ref = max(float(K_ref), cfg.scan_z_stiffness_floor)
+    z_ref = cfg.approach_z - cfg.F_desired / K_ref
+    return float(np.clip(z_ref, cfg.scan_z_min, cfg.scan_z_max))
 
 
 def run_trial(robot, kin_tool, kin_flange,
@@ -144,10 +182,10 @@ def run_trial(robot, kin_tool, kin_flange,
     z_contact = None
     t0 = rospy.Time.now().to_sec()
     last_approach_time = t0
-    approach_speed = 0.005
+    approach_speed = cfg.approach_speed
     z_ref_approach = rs["tool_position"][2]
     xy_ref_approach = np.array([cfg.scan_start_x, cfg.scan_y])
-    contact_z_threshold = cfg.scan_z
+    contact_z_threshold = scan_z_reference(cfg, venv, cfg.scan_start_x)
     approach_timeout = max(
         20.0,
         1.5 * max(0.0, z_ref_approach - contact_z_threshold) / approach_speed + 5.0,
@@ -155,7 +193,7 @@ def run_trial(robot, kin_tool, kin_flange,
     approach_count = 0
     rospy.loginfo(
         f"  Approach target: z<={contact_z_threshold:.4f}m or |Fz|>0.300N; "
-        f"surface_z={cfg.approach_z:.4f}m, scan_z={cfg.scan_z:.4f}m, "
+        f"surface_z={cfg.approach_z:.4f}m, scan_z0={contact_z_threshold:.4f}m, "
         f"xy_ref=[{xy_ref_approach[0]:.4f}, {xy_ref_approach[1]:.4f}], "
         f"z0={z_ref_approach:.4f}m, speed={approach_speed:.4f}m/s, "
         f"timeout={approach_timeout:.1f}s"
@@ -291,20 +329,138 @@ def run_trial(robot, kin_tool, kin_flange,
             return False
 
     if z_contact is None:
-        z_contact = cfg.scan_z
+        z_contact = contact_z_threshold
 
     sigma_f_int.reset()
     integ_euler = np.zeros(3)
     rospy.loginfo(
         f"  Contact completed at z={z_contact:.4f}; "
-        f"scan_z_ref={cfg.scan_z:.4f}, surface_z={cfg.approach_z:.4f}"
+        f"scan_z_ref0={contact_z_threshold:.4f}, surface_z={cfg.approach_z:.4f}"
     )
+
+    # ---- Phase 1.5: 接触调整 ----
+    # 刚接触后先在扫描起点保持 x 不动，让力控、刚度估计和姿态积分项收敛。
+    # 这一段只执行控制，不写入主 logger；正式扫描的数据从 Phase 2 的 t=0 开始。
+    rospy.loginfo("  Phase 1.5: Contact adjustment (not logged)...")
+    x_cur = cfg.scan_start_x
+    adjust_t0 = time.time()
+    adjust_last_log = 0.0
+    adjust_forces = []
+    adjust_z_values = []
+    adjust_pos_errors = []
+    adjust_window = max(3, int(cfg.adjustment_stable_window * cfg.ctrl_rate))
+    delta_dot_est = ContactDeltaDotEstimator(
+        tau=cfg.contact_delta_dot_filter_tau,
+        limit=cfg.contact_delta_dot_limit,
+    )
+
+    while not rospy.is_shutdown():
+        adjust_t = time.time() - adjust_t0
+        rs = update_robot_state(kin_tool, kin_flange)
+        tp = rs["tool_position"]
+        tv = rs["tool_position_velocity"]
+
+        delta = contact_delta_from_surface(cfg, tp[2])
+        delta_dot, delta_dot_raw, delta_dot_fd = delta_dot_est.update(
+            delta, dt, raw_delta_dot=-tv[2]
+        )
+        F_z = venv.compute_force(tp[0], delta, delta_dot) if venv else 0.0
+        K_hat, B_hat = est.update(abs(F_z), delta, delta_dot)
+
+        z_scan_ref = scan_z_reference(cfg, venv, x_cur)
+        x_ref = np.array([x_cur, cfg.scan_y, z_scan_ref])
+        xdot_ref = np.zeros(3)
+        F_des = np.array([0.0, 0.0, cfg.F_desired])
+        F_meas = np.array([0.0, 0.0, abs(F_z)])
+
+        e_r1 = tp - x_ref
+        e_r2 = tv - xdot_ref
+        e_f_vec = F_meas - F_des
+        force_blend = min(1.0, max(0.0, adjust_t / cfg.contact_force_blend_time))
+        e_f_vec_ctrl = force_blend * e_f_vec
+        sigma_f = sigma_f_int.update(e_f_vec_ctrl)
+
+        F_actual = abs(F_z)
+        e_f_scalar = F_actual - cfg.F_desired
+        e_f_dot = (e_f_scalar - prev_ef) / dt; prev_ef = e_f_scalar
+        e_r_scalar = np.linalg.norm(tp[:2] - np.array([x_cur, cfg.scan_y]))
+        de_r = (e_r_scalar - prev_er) / dt; prev_er = e_r_scalar
+        dK = (K_hat - prev_K) / dt; prev_K = K_hat
+
+        if isinstance(sched, FixedAlphaScheduler):
+            alpha = sched.compute()
+        else:
+            alpha = sched.compute(
+                F_norm=abs(F_z), e_f=e_f_scalar, K_hat=K_hat,
+                e_r=e_r_scalar, z_vel=tv[2],
+                de_f=e_f_dot, dK=dK, de_r=de_r,
+                F_desired=cfg.F_desired, F_min=cfg.F_min, F_max=cfg.F_max,
+                tracking_boost_enabled=True,
+            )
+
+        tau, _, _, integ_euler, _ = compute_torque_no_rcm(
+            ctrl, rs, kin_tool,
+            e_r1, e_r2, e_f_vec_ctrl, sigma_f,
+            alpha=alpha, K_e_hat=K_hat,
+            ref_euler_fixed=ref_euler_fixed,
+            integ_euler=integ_euler, dt=dt,
+        )
+        robot.exec_torque_cmd(tau)
+
+        adjust_forces.append(F_actual)
+        adjust_z_values.append(tp[2])
+        adjust_pos_errors.append(np.linalg.norm(tp - x_ref))
+        if len(adjust_forces) > adjust_window:
+            adjust_forces.pop(0)
+            adjust_z_values.pop(0)
+            adjust_pos_errors.pop(0)
+
+        force_std = float(np.std(adjust_forces)) if len(adjust_forces) > 1 else float("inf")
+        z_std = float(np.std(adjust_z_values)) if len(adjust_z_values) > 1 else float("inf")
+        pos_std = float(np.std(adjust_pos_errors)) if len(adjust_pos_errors) > 1 else float("inf")
+        force_slope = 0.0
+        if len(adjust_forces) > 1:
+            force_slope = abs(adjust_forces[-1] - adjust_forces[0]) / max(
+                (len(adjust_forces) - 1) * dt, dt
+            )
+        stable = (
+            adjust_t >= cfg.adjustment_min_time
+            and force_blend >= 1.0
+            and abs(F_actual - cfg.F_desired) <= cfg.adjustment_force_error
+            and force_std <= cfg.contact_stable_force_std
+            and force_slope <= cfg.contact_stable_force_slope
+            and z_std <= cfg.contact_stable_z_std
+            and pos_std <= cfg.adjustment_pos_std
+        )
+
+        if adjust_t - adjust_last_log >= 0.5:
+            adjust_last_log = adjust_t
+            rospy.loginfo(
+                f"  adjusting | t={adjust_t:.2f}s, F={F_actual:.3f}N, "
+                f"F_std={force_std:.3f}, F_slope={force_slope:.3f}N/s, "
+                f"z_std={z_std*1000:.3f}mm, pos_std={pos_std*1000:.3f}mm, "
+                f"blend={force_blend:.2f}, K={K_hat:.1f}, B={B_hat:.2f}"
+            )
+
+        if stable:
+            rospy.loginfo(
+                f"  Adjustment settled after {adjust_t:.2f}s; "
+                f"discarded {len(adjust_forces)} recent adjustment samples from scan log."
+            )
+            break
+        if adjust_t >= cfg.adjustment_timeout:
+            rospy.logwarn(
+                f"  Adjustment timeout after {adjust_t:.2f}s; start scan without "
+                f"logging the contact transient (F_std={force_std:.3f}, "
+                f"F_slope={force_slope:.3f}N/s, z_std={z_std*1000:.3f}mm)."
+            )
+            break
+        rate.sleep()
 
     # ---- Phase 2: 恒力扫描 ----
     # 扫描阶段 x 方向按 scan_vx 匀速推进，z 方向由力位控制器自动调节，
     # 目标是在跟踪扫描路径的同时把接触反力维持在 F_desired 附近。
     rospy.loginfo("  Phase 2: Scanning...")
-    x_cur = cfg.scan_start_x
     t_scan = time.time()
 
     while not rospy.is_shutdown() and x_cur < cfg.scan_end_x:
@@ -314,20 +470,27 @@ def run_trial(robot, kin_tool, kin_flange,
         tv = rs["tool_position_velocity"]
 
         # 计算当前虚拟接触力，并用同一压入量送入环境估计器。
+        delta = contact_delta_from_surface(cfg, tp[2])
+        delta_dot, delta_dot_raw, delta_dot_fd = delta_dot_est.update(
+            delta, dt, raw_delta_dot=-tv[2]
+        )
+        if venv:
+            K_env_true, B_env_true = venv.get_stiffness(tp[0])
+        else:
+            K_env_true, B_env_true = 0.0, 0.0
         F_z = 0.0
         if venv:
-            F_z = venv.compute_force(
-                tp[0], contact_delta_from_surface(cfg, tp[2]), -tv[2]
-            )
+            F_z = venv.compute_force(tp[0], delta, delta_dot)
 
         K_hat, B_hat = est.update(
             abs(F_z),
-            contact_delta_from_surface(cfg, tp[2]),
-            -tv[2],
+            delta,
+            delta_dot,
         )
 
         # 当前期望 tool 位姿: x 随时间增长，y/z 固定。
-        x_ref = np.array([x_cur, cfg.scan_y, cfg.scan_z])
+        z_scan_ref = scan_z_reference(cfg, venv, x_cur)
+        x_ref = np.array([x_cur, cfg.scan_y, z_scan_ref])
         xdot_ref = np.array([cfg.scan_vx, 0, 0])
 
         # 力目标: +z 方向为上 (接触反力方向)
@@ -341,9 +504,8 @@ def run_trial(robot, kin_tool, kin_flange,
         e_r2 = tv - xdot_ref
         e_f_vec = F_meas - F_des
 
-        # 刚进入扫描的前 contact_force_blend_time 秒内渐进引入力控制，
-        # 防止接触瞬间的力误差直接造成控制力突变。
-        force_blend = min(1.0, max(0.0, t / cfg.contact_force_blend_time))
+        # 接触调整阶段已经完成力控渐入，正式扫描从完整力控开始。
+        force_blend = 1.0
         e_f_vec_ctrl = force_blend * e_f_vec
         sigma_f = sigma_f_int.update(e_f_vec_ctrl)
 
@@ -366,6 +528,7 @@ def run_trial(robot, kin_tool, kin_flange,
                 e_r=e_r_scalar, z_vel=tv[2],
                 de_f=e_f_dot, dK=dK, de_r=de_r,
                 F_desired=cfg.F_desired, F_min=cfg.F_min, F_max=cfg.F_max,
+                tracking_boost_enabled=True,
             )
             phase_val = sched.phase_detector.phase.value
 
@@ -413,6 +576,11 @@ def run_trial(robot, kin_tool, kin_flange,
             sigma_f_norm=np.linalg.norm(sigma_f),
             e_r1_norm=np.linalg.norm(e_r1),
             alpha=alpha, K_hat=K_hat,
+            K_hat_raw=getattr(est, "K_observed", K_hat),
+            B_hat=B_hat,
+            delta=delta, delta_dot=delta_dot,
+            delta_dot_raw=delta_dot_raw, delta_dot_fd=delta_dot_fd,
+            K_env_true=K_env_true, B_env_true=B_env_true,
             K_eff=K_eff,
             x_desired=x_cur,
             error_rcm=0.0, error_track=error[1],
@@ -426,7 +594,14 @@ def run_trial(robot, kin_tool, kin_flange,
     # 退回阶段通知调度器进入 RETREAT，使 alpha 回到位置优先。
     if hasattr(sched, 'set_retreat'):
         sched.set_retreat(True)
-    safe_move_to_joint_position(robot, INIT_JOINTS)
+    retreat_ok = safe_move_to_joint_position(
+        robot, INIT_JOINTS,
+        timeout=cfg.retreat_timeout,
+        prefer_streaming=True,
+        log_prefix="retreat",
+    )
+    if not retreat_ok:
+        rospy.logwarn("  Retreat did not reach INIT_JOINTS within timeout; leaving trial safely.")
     rospy.loginfo(f"  Done. {logger.count} samples.")
     return True
 

@@ -16,19 +16,28 @@ import numpy as np
 
 
 class EnvironmentEstimator:
-    """RLS Kelvin-Voigt 估计器。
+    """鲁棒 Kelvin-Voigt 环境估计器。
 
-    在扫描阶段，控制器并不知道真实环境刚度，因此用测得的接触力 F、
-    压入量 delta 和压入速度 delta_dot 在线估计 [K_e, B_e]。
-    估计出的 K_e 会作为 `K_hat` 送入 `CooperativeGameController.get_gain`，
-    用于在刚度网格上插值控制增益。
+    在扫描阶段，控制器主要需要可靠的 `K_hat` 做增益查表。Gazebo/真机
+    恒力扫描时压入量通常只有数毫米，同时 `delta_dot` 来自机器人速度估计，
+    二参数 RLS 很容易把速度噪声误解释成刚度变化。这里保留 bounded RLS
+    作为阻尼估计辅助，但控制输出的 K_hat 使用准静态表观刚度 F/delta
+    的 EMA 低通值。
     """
 
     def __init__(self, forgetting_factor=0.995, P0=1e4,
-                 theta_init=None, alpha_lp=0.05):
+                 theta_init=None, alpha_lp=0.05,
+                 min_delta=2e-4, K_bounds=(50.0, 5000.0),
+                 B_bounds=(0.1, 100.0), delta_dot_limit=0.02,
+                 min_delta_dot_for_B=5e-4):
         self.lam = float(forgetting_factor)
         self.P0 = float(P0)
         self.alpha_lp = float(alpha_lp)
+        self.min_delta = float(min_delta)
+        self.K_min, self.K_max = map(float, K_bounds)
+        self.B_min, self.B_max = map(float, B_bounds)
+        self.delta_dot_limit = float(delta_dot_limit)
+        self.min_delta_dot_for_B = float(min_delta_dot_for_B)
 
         # theta = [K_e, B_e]，默认从中等偏软环境开始估计。
         if theta_init is None:
@@ -39,39 +48,49 @@ class EnvironmentEstimator:
         self.P = self.P0 * np.eye(2)
         self._K_filt = float(self._theta_init[0])
         self._prev_K = self._K_filt
+        self._K_observed = self._K_filt
 
     def update(self, F_meas, delta, delta_dot):
         """
         更新估计
 
-        非接触保护: F_meas < 0.3N 或 δ < 1e-7 时跳过更新
-        参数下界: K_e ≥ 10, B_e ≥ 0.1
+        非接触保护: F_meas < 0.3N 或 δ 太小时跳过更新。
 
         Returns
         -------
-        K_e_filt : scalar   低通滤波后的刚度估计
-        B_e      : scalar   粘滞阻尼估计
+        K_e_filt : scalar   低通滤波后的表观刚度估计
+        B_e      : scalar   有界粘滞阻尼估计
         """
         self._prev_K = self._K_filt
 
         # 非接触保护: 未接触时 phi 信息不足，强行更新会污染刚度估计。
-        if abs(F_meas) < 0.3 or abs(delta) < 1e-7:
-            return self._K_filt, max(self.theta[1], 0.1)
+        if abs(F_meas) < 0.3 or abs(delta) < self.min_delta:
+            return self._K_filt, float(np.clip(self.theta[1], self.B_min, self.B_max))
 
-        # RLS 标准递推。phi 是 Kelvin-Voigt 模型的回归向量。
-        phi = np.array([delta, delta_dot])
+        # 控制器真正敏感的是 K_hat。恒力扫描中的 delta_dot 噪声会让二参数
+        # RLS 病态，因此 K_hat 采用准静态表观刚度作为主估计。
+        self._K_observed = float(np.clip(abs(F_meas) / abs(delta),
+                                         self.K_min, self.K_max))
+        self._K_filt += self.alpha_lp * (self._K_observed - self._K_filt)
+        self._K_filt = float(np.clip(self._K_filt, self.K_min, self.K_max))
+
+        # B_hat 仍用有界 RLS 辅助估计，但速度回归量先限幅，避免单个
+        # 速度尖峰把 theta 拉飞。K 输出不直接采用 RLS 的 theta[0]。
+        delta_dot_rls = float(np.clip(delta_dot,
+                                      -self.delta_dot_limit,
+                                      self.delta_dot_limit))
+        if abs(delta_dot_rls) < self.min_delta_dot_for_B:
+            return self._K_filt, float(np.clip(self.theta[1],
+                                               self.B_min, self.B_max))
+        phi = np.array([delta, delta_dot_rls])
         Pp = self.P @ phi
         gain = Pp / (self.lam + phi @ Pp)
         err = F_meas - phi @ self.theta
         self.theta = self.theta + gain * err
         self.P = (self.P - np.outer(gain, phi @ self.P)) / self.lam
 
-        # 参数下界
-        self.theta[0] = max(self.theta[0], 10.0)
-        self.theta[1] = max(self.theta[1], 0.1)
-
-        # EMA 低通: 控制器使用滤波后的刚度，避免查表增益抖动。
-        self._K_filt += self.alpha_lp * (self.theta[0] - self._K_filt)
+        self.theta[0] = np.clip(self.theta[0], self.K_min, self.K_max)
+        self.theta[1] = np.clip(self.theta[1], self.B_min, self.B_max)
 
         return self._K_filt, self.theta[1]
 
@@ -81,7 +100,12 @@ class EnvironmentEstimator:
 
     @property
     def B_e(self):
-        return max(self.theta[1], 0.1)
+        return float(np.clip(self.theta[1], self.B_min, self.B_max))
+
+    @property
+    def K_observed(self):
+        """最近一次 F/delta 表观刚度观测。"""
+        return self._K_observed
 
     @property
     def dK_e(self):
@@ -93,3 +117,4 @@ class EnvironmentEstimator:
         self.P = self.P0 * np.eye(2)
         self._K_filt = float(self._theta_init[0])
         self._prev_K = self._K_filt
+        self._K_observed = self._K_filt

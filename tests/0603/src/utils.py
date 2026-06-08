@@ -191,6 +191,88 @@ class VectorRateLimiter:
         return self._value.copy()
 
 
+class AlphaCommandLimiter:
+    """平滑并限速 alpha 命令，避免仲裁权重逐采样跳变。"""
+
+    def __init__(self, tau=0.20, max_rate=1.0, initial=None,
+                 alpha_min=0.01, alpha_max=0.99):
+        self.tau = float(max(tau, 0.0))
+        self.max_rate = float(max(max_rate, 0.0))
+        self.alpha_min = float(alpha_min)
+        self.alpha_max = float(alpha_max)
+        self._filtered = None
+        self._value = None
+        if initial is not None:
+            value = float(np.clip(initial, self.alpha_min, self.alpha_max))
+            self._filtered = value
+            self._value = value
+
+    def reset(self, value=None):
+        if value is None:
+            self._filtered = None
+            self._value = None
+            return
+        value = float(np.clip(value, self.alpha_min, self.alpha_max))
+        self._filtered = value
+        self._value = value
+
+    def update(self, command, dt):
+        command = float(np.clip(command, self.alpha_min, self.alpha_max))
+        dt = max(float(dt), 1e-6)
+        if self._filtered is None:
+            self._filtered = command
+        else:
+            beta = float(np.clip(dt / max(self.tau, dt), 0.0, 1.0))
+            self._filtered += beta * (command - self._filtered)
+
+        if self._value is None:
+            self._value = self._filtered
+        elif self.max_rate > 0.0:
+            max_step = self.max_rate * dt
+            self._value += float(np.clip(
+                self._filtered - self._value, -max_step, max_step
+            ))
+        else:
+            self._value = self._filtered
+        return float(np.clip(self._value, self.alpha_min, self.alpha_max))
+
+
+class ContactDeltaDotEstimator:
+    """由压入量差分估计接触速度，避免机器人状态速度尖峰污染虚拟力。
+
+    `tool_position_velocity` 在 Gazebo 中偶发单帧符号翻转。虚拟接触力的
+    Kelvin-Voigt 阻尼项直接使用该速度会产生假的力尖峰。这里以连续的
+    `delta` 差分为主，经过一阶低通和限幅后作为控制/虚拟环境使用的
+    `delta_dot`，同时返回 raw/fd 便于日志诊断。
+    """
+
+    def __init__(self, tau=0.05, limit=0.02, initial=0.0):
+        self.tau = float(tau)
+        self.limit = float(abs(limit))
+        self._filter = FirstOrderLowPass(self.tau, initial=float(initial))
+        self._prev_delta = None
+
+    def reset(self, delta=None, value=0.0):
+        self._prev_delta = None if delta is None else float(delta)
+        self._filter.reset(float(value))
+
+    def update(self, delta, dt, raw_delta_dot=None):
+        delta = float(delta)
+        dt = max(float(dt), 1e-6)
+        raw = 0.0 if raw_delta_dot is None else float(raw_delta_dot)
+        if self._prev_delta is None:
+            fd = raw if np.isfinite(raw) else 0.0
+        else:
+            fd = (delta - self._prev_delta) / dt
+        self._prev_delta = delta
+
+        fd = 0.0 if not np.isfinite(fd) else fd
+        filtered = float(self._filter.update(fd, dt))
+        if self.limit > 0.0:
+            filtered = float(np.clip(filtered, -self.limit, self.limit))
+        return filtered, raw, fd
+
+
 class DataLogger:
     """时序数据记录器。
 
@@ -226,6 +308,10 @@ class DataLogger:
             'K_hat_raw': [], 'force_blend': [],
             'z_min_safe': [],
             'K_hat_ctrl': [],
+            'delta': [], 'delta_dot': [],
+            'delta_dot_raw': [], 'delta_dot_fd': [],
+            'K_env_true': [], 'B_env_true': [], 'B_hat': [],
+            'contact_plane_z': [], 'scan_z_ref': [],
         }
 
     def log(self, **kw):

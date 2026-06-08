@@ -449,7 +449,7 @@ class ForceMarginFuzzyAlphaScheduler:
 
     def compute(self, F_norm, e_f=0.0, K_hat=None, e_r=0.0, z_vel=0.0,
                 de_f=0.0, dK=0.0, de_r=0.0, F_desired=None,
-                F_min=None, F_max=None, **unused):
+                F_min=None, F_max=None, tracking_boost_enabled=True, **unused):
         F_desired = self.F_desired if F_desired is None else float(F_desired)
         F_min = self.F_min if F_min is None else float(F_min)
         F_max = self.F_max if F_max is None else float(F_max)
@@ -509,11 +509,24 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
     Force-margin 模糊安全仲裁 + 连续阶段先验。
 
     继承 ForceMarginFuzzyAlphaScheduler 的模糊推理、上下界安全修正和
-    一阶平滑，仅将离散 phase_params 查表替换为 ContinuousPhasePrior。
+    一阶平滑，并将离散 phase_params 查表替换为 ContinuousPhasePrior。
+    对 no-RCM 扫描而言，力误差和边界裕度安全时应优先修正几毫米量级的
+    横向轨迹滞后，因此额外加入 safe-tracking boost:
+      - 力处于安全裕度内且 |F-Fd| 很小时，提高 alpha 下限；
+      - 低力/高力边界仍由原 guard 规则直接覆盖。
     """
 
     def __init__(self, dt=0.01, F_min=0.2, F_max=1.0,
-                 F_desired=0.5, phase_prior=None, **kwargs):
+                 F_desired=0.5, phase_prior=None,
+                 safe_tracking_alpha=0.82,
+                 safe_tracking_extra=0.06,
+                 safe_margin_start=0.45,
+                 safe_margin_full=0.75,
+                 force_error_start=0.08,
+                 force_error_full=0.25,
+                 track_error_start=0.001,
+                 track_error_full=0.003,
+                 **kwargs):
         super().__init__(
             dt=dt,
             F_min=F_min,
@@ -527,11 +540,90 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
             T_transient=1.0,
         )
         self.phase_prior_history = []
+        self.safe_tracking_alpha = float(safe_tracking_alpha)
+        self.safe_tracking_extra = float(safe_tracking_extra)
+        self.safe_margin_start = float(safe_margin_start)
+        self.safe_margin_full = float(max(safe_margin_full, safe_margin_start + 1e-6))
+        self.force_error_start = float(force_error_start)
+        self.force_error_full = float(max(force_error_full, force_error_start + 1e-6))
+        self.track_error_start = float(track_error_start)
+        self.track_error_full = float(max(track_error_full, track_error_start + 1e-6))
 
     def _compute_phase_prior(self, phase, F_norm, z_vel):
         alpha_phi, w_phi = self.phase_prior.update(F_norm, z_vel, self.dt)
         self.phase_prior_history.append((alpha_phi, w_phi))
         return alpha_phi, w_phi
+
+    def _safe_tracking_boost(self, alpha_safe, rho_F, F_err, e_r):
+        margin_gate = _smoothstep(
+            (rho_F - self.safe_margin_start)
+            / (self.safe_margin_full - self.safe_margin_start)
+        )
+        force_gate = 1.0 - _smoothstep(
+            (abs(F_err) - self.force_error_start)
+            / (self.force_error_full - self.force_error_start)
+        )
+        track_gate = _smoothstep(
+            (abs(e_r) - self.track_error_start)
+            / (self.track_error_full - self.track_error_start)
+        )
+
+        gate = margin_gate * force_gate * track_gate
+        if gate <= 1e-9:
+            return alpha_safe
+
+        alpha_track = self.safe_tracking_alpha + self.safe_tracking_extra * track_gate
+        alpha_track = float(np.clip(alpha_track, self.alpha_min, self.alpha_max))
+        return float(alpha_safe + gate * max(0.0, alpha_track - alpha_safe))
+
+    def compute(self, F_norm, e_f=0.0, K_hat=None, e_r=0.0, z_vel=0.0,
+                de_f=0.0, dK=0.0, de_r=0.0, F_desired=None,
+                F_min=None, F_max=None, tracking_boost_enabled=True, **unused):
+        F_desired = self.F_desired if F_desired is None else float(F_desired)
+        F_min = self.F_min if F_min is None else float(F_min)
+        F_max = self.F_max if F_max is None else float(F_max)
+        if F_max <= F_min:
+            F_max = F_min + 1e-6
+
+        phase = self.phase_detector.update(F_norm, z_vel)
+        alpha_phi, w_phi = self._compute_phase_prior(phase, F_norm, z_vel)
+
+        F_h, S_h, D_r, rho_F, s_F, F_err = self._force_margin_inputs(
+            F_norm, F_desired, F_min, F_max, e_r
+        )
+        alpha_0 = self._defuzzify_alpha(self._infer(self._fuzzify(F_h, S_h, D_r)))
+
+        r_F = 1.0 - rho_F
+        alpha_safe = (
+            alpha_0
+            + self.k_upper * r_F * max(s_F, 0.0)
+            - self.k_lower * r_F * max(-s_F, 0.0)
+        )
+        if F_norm >= F_max:
+            alpha_safe = max(alpha_safe, self.upper_guard_alpha)
+        elif F_norm <= F_min:
+            alpha_safe = min(alpha_safe, self.lower_guard_alpha)
+        elif tracking_boost_enabled:
+            alpha_safe = self._safe_tracking_boost(
+                alpha_safe, rho_F=rho_F, F_err=F_err, e_r=e_r
+            )
+        alpha_safe = float(np.clip(alpha_safe, self.alpha_min, self.alpha_max))
+
+        alpha_raw = w_phi * alpha_phi + (1.0 - w_phi) * alpha_safe
+        alpha_raw = float(np.clip(alpha_raw, 0.01, 0.99))
+        alpha = self._alpha_filt + self.smooth_beta * (alpha_raw - self._alpha_filt)
+        if F_norm >= F_max:
+            alpha = max(alpha, self.upper_guard_alpha)
+        elif F_norm <= F_min:
+            alpha = min(alpha, self.lower_guard_alpha)
+        alpha = float(np.clip(alpha, 0.01, 0.99))
+        self._alpha_filt = alpha
+
+        self.alpha_history.append(alpha)
+        self.phase_history.append(phase.value)
+        self.rho_history.append(rho_F)
+        self.margin_history.append((F_h, S_h, D_r, s_F, F_err))
+        return alpha
 
     def set_retreat(self, val=True):
         super().set_retreat(val)

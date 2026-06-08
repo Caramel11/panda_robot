@@ -250,14 +250,17 @@ def plot_overview(data, metrics, title):
     ax.grid(True, alpha=0.3)
 
     ax = axes[2, 0]
-    ax.plot(t, data["alpha"], label="alpha")
+    alpha_line, = ax.plot(t, data["alpha"], label="alpha")
+    legend_handles = [alpha_line]
     if np.isfinite(data["K_hat"]).any():
         ax2 = ax.twinx()
-        ax2.plot(t, data["K_hat"], color="tab:orange", alpha=0.65, label="K_hat")
+        k_hat_line, = ax2.plot(t, data["K_hat"], color="tab:orange", alpha=0.65, label="K_hat")
+        legend_handles.append(k_hat_line)
         ax2.set_ylabel("K_hat")
     ax.set_ylabel("alpha")
     ax.set_xlabel("time (s)")
     ax.grid(True, alpha=0.3)
+    ax.legend(handles=legend_handles, fontsize=9, loc="best")
 
     ax = axes[2, 1]
     ax.plot(t, data["error_rcm"] * 1000, label="RCM error")

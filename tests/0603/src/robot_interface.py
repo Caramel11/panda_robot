@@ -56,11 +56,54 @@ def update_robot_state(kin_tool, kin_flange):
 # ================================================================
 # 安全控制器切换
 # ================================================================
-def safe_move_to_joint_position(robot, joints, timeout=10.0):
+def _stream_joint_position(robot, joints, timeout=10.0, tolerance=0.01,
+                           max_step=0.004, rate_hz=100, log_prefix="move"):
+    """用小步关节位置命令退回目标位姿，并在日志中报告进度。"""
+    tgt = np.array(joints, dtype=np.float64)
+    rate = rospy.Rate(rate_hz)
+    t0 = rospy.get_time()
+    last_log = t0
+
+    while not rospy.is_shutdown():
+        now = rospy.get_time()
+        cur = np.array(robot.angles(), dtype=np.float64)
+        err = tgt - cur
+        err_inf = float(np.max(np.abs(err)))
+        err_norm = float(np.linalg.norm(err))
+
+        if err_inf <= tolerance:
+            rospy.loginfo(
+                f"  {log_prefix}: reached joint target "
+                f"(err_inf={err_inf:.4f}rad, err_norm={err_norm:.4f}rad)."
+            )
+            return True
+        if now - t0 >= timeout:
+            rospy.logwarn(
+                f"  {log_prefix}: timeout after {timeout:.1f}s "
+                f"(err_inf={err_inf:.4f}rad, err_norm={err_norm:.4f}rad)."
+            )
+            return False
+        if now - last_log >= 1.0:
+            last_log = now
+            rospy.loginfo(
+                f"  {log_prefix}: moving to joint target, "
+                f"err_inf={err_inf:.4f}rad, err_norm={err_norm:.4f}rad"
+            )
+
+        step = np.clip(0.08 * err, -max_step, max_step)
+        robot.exec_position_cmd((cur + step).tolist())
+        rate.sleep()
+
+    return False
+
+
+def safe_move_to_joint_position(robot, joints, timeout=10.0,
+                                prefer_streaming=False, log_prefix="safe move"):
     """effort → position 控制器切换的安全包装。
 
-    先发送零力矩、停止运动控制器，再尝试 move_to_joint_position。
-    如果 MoveIt/控制器调用失败，则退回到简单位置插值，保证实验结束时能回初始位姿。
+    先发送零力矩，再尝试有界的 trajectory 关节运动；必要时退回到
+    小步位置命令。真机 retreat 可设置 prefer_streaming=True，避免
+    MoveIt/action 阻塞时外层没有进度日志。
     """
     try:
         robot.exec_torque_cmd([0.0] * 7)
@@ -68,30 +111,33 @@ def safe_move_to_joint_position(robot, joints, timeout=10.0):
         pass
     rospy.sleep(0.3)
 
-    try:
-        mgr = robot._ctrl_manager
-        for c in mgr.list_active_controllers(only_motion_controllers=True):
-            try:
-                mgr.stop_controller(c)
-            except Exception:
-                pass
-        rospy.sleep(0.3)
-    except Exception:
-        pass
+    if prefer_streaming:
+        return _stream_joint_position(
+            robot, joints, timeout=timeout, log_prefix=log_prefix
+        )
 
     try:
-        robot.move_to_joint_position(joints, timeout=timeout)
+        rospy.loginfo(f"  {log_prefix}: trying trajectory joint move...")
+        robot.move_to_joint_position(joints, timeout=min(timeout, 5.0), use_moveit=False)
+        cur = np.array(robot.angles(), dtype=np.float64)
+        err_inf = float(np.max(np.abs(np.array(joints, dtype=np.float64) - cur)))
+        if err_inf <= 0.01:
+            rospy.loginfo(f"  {log_prefix}: trajectory joint move complete.")
+            return True
+        rospy.logwarn(
+            f"  {log_prefix}: trajectory move returned with "
+            f"err_inf={err_inf:.4f}rad; switching to streaming fallback."
+        )
     except Exception:
-        tgt = np.array(joints)
-        r = rospy.Rate(100)
-        for _ in range(int(timeout * 100)):
-            if rospy.is_shutdown():
-                break
-            cur = np.array(robot.angles())
-            if np.linalg.norm(tgt - cur) < 0.01:
-                break
-            robot.exec_position_cmd((cur + 0.01 * (tgt - cur)).tolist())
-            r.sleep()
+        rospy.logwarn(
+            f"  {log_prefix}: trajectory joint move failed; "
+            "switching to streaming fallback.",
+            exc_info=True,
+        )
+
+    return _stream_joint_position(
+        robot, joints, timeout=timeout, log_prefix=f"{log_prefix} fallback"
+    )
 
 
 # ================================================================

@@ -1,8 +1,8 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-主程序 A: RCM 约束下的合作博弈力-位扫描实验
-=============================================
+主程序 A: RCM 约束下的合作博弈力-位扫描实验 (ROS 1 真机版)
+===========================================================
 
 控制链路:
   泄漏积分更新 → ARE/Pareto 增益查表 → u_tool → RCM 杠杆 → τ
@@ -14,8 +14,8 @@
   σ̇_f  = e_f − ε_f · σ_f                    (泄漏积分器)
 
 用法:
-  Terminal 1: roslaunch panda_simulator simulation.launch
-  Terminal 2: python run_with_rcm.py --strategy continuous_force_margin --controller-mode pareto_iter
+  python run_with_rcm_real.py --strategy continuous_force_margin --controller-mode pareto_iter \
+      --force-port /dev/ttyUSB0 --force-tare-on-start
 """
 import argparse
 import os
@@ -37,9 +37,10 @@ from src.alpha_scheduler_gt import (
 )
 from src.env_estimator import EnvironmentEstimator
 from src.utils import (
-    VirtualStiffnessSurface, ForceSensorInput, DataLogger,
+    VirtualStiffnessSurface, DataLogger, FirstOrderLowPass,
     ContactDeltaDotEstimator, AlphaCommandLimiter,
 )
+from src.force_sensor_direct import DirectForceSensorInput
 from src.leaky_integrator import LeakyIntegrator
 from src.robot_interface import (
     update_robot_state, safe_move_to_joint_position,
@@ -52,28 +53,34 @@ from src.robot_interface import (
 # 实验配置
 # ================================================================
 class Config:
+    # 扫描轨迹 (tool tip)
     # 扫描几何参数，单位均为 m；with-RCM 中这些量描述 tool tip。
-    # Phase 2 中 x 从 scan_start_x 走到 scan_end_x，RCM 约束由 trocar_position 给出。
-    scan_start_x = 0.30      # 扫描起点 tool-tip x
-    scan_end_x   = 0.35      # 扫描终点 tool-tip x
+    # RCM 真机入口沿用 cooperative_gt_0428 的安全 RCM 工作区；
+    # no-RCM ROS2 真机参数中的 0.43-0.50m 接触区属于无 RCM 长工具坐标，
+    # 不直接套用到 trocar 约束几何。
+    scan_start_x = 0.31      # 扫描起点 tool-tip x
+    scan_end_x   = 0.34      # 扫描终点 tool-tip x
     scan_y       = 0.0       # 扫描线 y 坐标
-    scan_z       = 0.2       # 名义扫描 z，高度会在接触后由 scan_z_ref 自适应修正
-    approach_z   = 0.05      # 接近阶段虚拟/名义表面高度
+    scan_z       = 0.095     # 名义扫描 z，高度会在接触后由 scan_z_ref 自适应修正
+    approach_z   = 0.100     # 接近阶段名义表面高度
     scan_vx      = 0.0004    # Phase 2 沿 x 的扫描速度, m/s
 
-    # 力目标与 alpha 调度边界，单位 N。
-    F_desired    = 0.5       # 期望法向接触力
-    F_min        = 0.3       # 低力边界，低于该值更偏向力控补偿
-    F_max        = 1.0       # 高力边界，高于该值更偏向位置/安全
+    # 力目标、调度边界与刚度估计初始化。
+    F_desired    = 1.0       # 期望法向接触力, N
+    F_min        = 0.3       # alpha 调度的低力边界, N
+    F_max        = 2.0       # alpha 调度和安全监测的高力边界, N
     force_axis   = 2         # 力控制轴，2 表示 z 轴
+    estimator_initial_K = 500.0  # 初始环境刚度估计, N/m
+    estimator_initial_B = 5.0    # 初始环境阻尼估计, Ns/m
+    estimator_alpha_lp = 0.08    # 估计值低通更新系数
 
     # RCM 几何参数。trocar_position 是基坐标系下的穿刺点位置；
     # tool_length 是 flange 到 tool tip 的等效工具长度。
     trocar_position = np.array([0.3, 0, 0.235])
     tool_length = 0.525
 
-    # 虚拟变刚度区: 每项为 (x_start, x_end, K_e, B_e)。
-    # K_e 单位 N/m，B_e 单位 Ns/m，用于 Gazebo/mock 接触力与估计器对照。
+    # 分段环境参数: 真机版仅用于可选虚拟环境回退和离线结果兼容。
+    # 每项为 (x_start, x_end, K_e, B_e)，K_e 单位 N/m，B_e 单位 Ns/m。
     # stiffness_zones = [
     #     (0.25, 0.29, 500,  5),    # 软
     #     (0.29, 0.33, 5000, 50),   # 硬
@@ -82,8 +89,8 @@ class Config:
     # ]
 
     stiffness_zones = [
-        (0.30, 0.325, 250, 4),    # 低刚度
-        (0.325, 0.35, 500, 8),    # 高刚度
+        (0.30, 0.325, 300, 5),    # 映射 no-RCM 真机软区到 RCM 工作区
+        (0.325, 0.35, 500, 8),    # 映射 no-RCM 真机硬区到 RCM 工作区
     ]
 
     # 控制频率与泄漏积分器。eps 越大，积分记忆衰减越快。
@@ -102,7 +109,7 @@ class Config:
     approach_force_threshold = 0.3     # 判定接触的最小接触力, N
     approach_z_margin = 0.002          # z 接近目标的安全余量, m
     approach_timeout = 80.0            # 接近阶段基础超时, s，会按起始距离自动放大
-    approach_surface_margin = 0.0005   # 虚拟表面判定余量, m
+    approach_surface_margin = 0.0005   # 表面判定余量, m
     approach_follow_tolerance = 0.0012 # tool 跟踪误差软限, m
     approach_rcm_soft_limit = 0.0025   # RCM 误差软限，超过后降速, m
     approach_rcm_warn = 0.004          # RCM 误差告警阈值, m
@@ -111,6 +118,8 @@ class Config:
     approach_start_speed_limit = 0.003 # 接近开始前关节/笛卡尔速度稳定阈值, m/s
     approach_start_settle_hold = 0.5   # 进入接近前需要连续稳定的时间, s
     approach_start_settle_timeout = 8.0  # 等待初始速度稳定的超时, s
+    allow_sensorless_approach = False  # 真机默认必须有力传感/虚拟力来源
+    force_filter_tau = 0.02            # 传感器力一阶低通时间常数, s
 
     # Phase 1.5/2 接触力与 z_ref 自适应参数。
     scan_contact_bias = 0.0010         # 接触预载压入偏置, m
@@ -124,7 +133,7 @@ class Config:
     contact_delta_dot_limit = 0.02       # 压入速度限幅, m/s
 
     # alpha 与 RCM 安全调度。RCM 误差越接近暂停阈值，alpha 越偏位置/RCM。
-    scan_min_alpha_when_rcm_soft = 0.85  # RCM 软区内 alpha 下限上界
+    scan_min_alpha_when_rcm_soft = 0.90  # RCM 软区内 alpha 下限上界
     scan_alpha_filter_tau = 0.25         # alpha 一阶平滑时间常数, s
     scan_alpha_rate_limit = 0.8          # alpha 变化率限幅, 1/s
     scan_rcm_recovery_enter = 0.0050     # 进入 RCM 恢复模式阈值, m
@@ -137,8 +146,8 @@ class Config:
     scan_timeout = 260.0                 # 正式扫描最长时间, s
     scan_track_slow_error = 0.0040       # 跟踪误差超过后降速, m
     scan_track_pause_error = 0.0070      # 跟踪误差超过后暂停推进, m
-    scan_rcm_slow_error = 0.0035         # RCM 误差超过后降速并抬高 alpha, m
-    scan_rcm_pause_error = 0.0065        # RCM 误差超过后暂停推进, m
+    scan_rcm_slow_error = 0.0022         # RCM 误差超过后降速并抬高 alpha, m
+    scan_rcm_pause_error = 0.0045        # RCM 误差超过后暂停推进, m
     scan_force_slow = 0.75               # 接触力超过后降速, N
     scan_force_pause = 1.10              # 接触力超过后暂停推进, N
     scan_tau_norm_limit = 2.5            # 扫描阶段关节力矩范数限幅, Nm
@@ -150,7 +159,7 @@ class Config:
     adjustment_min_time = 1.0            # 调整阶段最短持续时间, s
     adjustment_timeout = 10.0            # 调整阶段最长等待时间, s
     adjustment_stable_window = 0.8       # 稳定统计窗口, s
-    adjustment_force_error = 0.15        # 允许的稳态力误差, N
+    adjustment_force_error = 0.25        # 允许的稳态力误差, N
     adjustment_force_std = 0.05          # 力标准差阈值, N
     adjustment_force_slope = 0.20        # 力变化率阈值, N/s
     adjustment_pos_std = 0.0005          # 位置误差标准差阈值, m
@@ -166,11 +175,14 @@ def read_contact_force(force_sensor, venv, x, delta, delta_dot):
     优先使用新鲜的六维力传感器数据；若传感器未启动、话题无数据或超时，
     回退到原 Kelvin-Voigt 虚拟刚度环境。
     """
+    if force_sensor is not None and hasattr(force_sensor, "update_contact_state"):
+        force_sensor.update_contact_state(x, delta, delta_dot)
+
     if force_sensor is not None and force_sensor.available():
         return (
             force_sensor.contact_force(),
             force_sensor.wrench_vector(),
-            "sensor",
+            getattr(force_sensor, "source_name", "sensor"),
             True,
         )
 
@@ -271,11 +283,12 @@ def run_trial(robot, kin_tool, kin_flange,
     # 泄漏积分器状态 (仅 σ_f, e_r1 直接由 x−x_r 计算)
     sigma_f_int = LeakyIntegrator(eps=cfg.eps_f, dt=dt, dim=3)
     integ_euler = np.zeros(3)
+    force_filter = FirstOrderLowPass(cfg.force_filter_tau, initial=0.0)
 
     # 差分导数缓存
     prev_ef = 0.0
     prev_er = 0.0
-    prev_K = 500.0
+    prev_K = cfg.estimator_initial_K
 
     est.reset()
     sched.reset()
@@ -288,6 +301,12 @@ def run_trial(robot, kin_tool, kin_flange,
     rospy.sleep(cfg.settle_time)
     rs = wait_for_tool_settle(robot, kin_tool, kin_flange, cfg, rate)
     rospy.loginfo(f"  Tool at: {rs['tool_position']}")
+    if force_sensor is None and venv is None and not cfg.allow_sensorless_approach:
+        rospy.logerr(
+            "  Direct force sensor is unavailable and virtual env fallback is disabled; "
+            "abort before approach. Use --use-virtual-env only for bench/debug runs."
+        )
+        return False
 
     # ---- Phase 1: 下降接近 ----
     rospy.loginfo("  Phase 1: Approaching...")
@@ -333,17 +352,24 @@ def run_trial(robot, kin_tool, kin_flange,
             - compute_position_rcm(tp, flange_pos, cfg.trocar_position)
         )
 
-        delta = max(0, contact_z_threshold - tp[2])
-        F_z, wrench, force_source, sensor_available = read_contact_force(
-            force_sensor, venv, tp[0], delta, -tv[2]
-        )
-
         now = time.time()
         loop_dt = now - last_approach_time
         if loop_dt <= 0.0 or not np.isfinite(loop_dt):
             loop_dt = dt
         loop_dt = min(max(loop_dt, dt), 0.1)
         last_approach_time = now
+
+        delta = max(0, contact_z_threshold - tp[2])
+        F_raw, wrench, force_source, sensor_available = read_contact_force(
+            force_sensor, venv, tp[0], delta, -tv[2]
+        )
+        F_z = float(force_filter.update(F_raw, loop_dt))
+        if not sensor_available and venv is None and not cfg.allow_sensorless_approach:
+            rospy.logwarn(
+                f"  Force sensor data is not fresh during approach "
+                f"(source={force_source}, F={F_z:.3f}N). Stop before descent."
+            )
+            return False
 
         prev_ref = approach_ref.copy()
         xy_ref_err = np.linalg.norm(approach_ref[:2] - target_xy)
@@ -382,7 +408,7 @@ def run_trial(robot, kin_tool, kin_flange,
             z_contact = tp[2]
             rospy.loginfo(
                 f"  Contact at z={z_contact:.4f}, F={F_z:.3f}N "
-                f"({force_source}), rcm={rcm_now*1000:.2f}mm"
+                f"(raw={F_raw:.3f}, {force_source}), rcm={rcm_now*1000:.2f}mm"
             )
             break
 
@@ -442,6 +468,7 @@ def run_trial(robot, kin_tool, kin_flange,
                 F_measured=abs(F_z),
                 F_desired=0.0,
                 F_err=abs(F_z),
+                F_raw=F_raw,
                 wrench=wrench,
                 force_source=force_source,
                 sensor_available=int(sensor_available),
@@ -468,7 +495,8 @@ def run_trial(robot, kin_tool, kin_flange,
                 f"|v|={np.linalg.norm(tv)*1000:.2f}mm/s | "
                 f"follow={follow_err*1000:.2f}mm xy_err={xy_actual_err*1000:.2f}mm | "
                 f"rcm={error[0]*1000:.2f}mm | "
-                f"scale={speed_scale:.2f} | F={F_z:.3f}N"
+                f"scale={speed_scale:.2f} | F={F_z:.3f}N raw={F_raw:.3f}N "
+                f"source={force_source}"
             )
         if error[0] > cfg.approach_rcm_warn and approach_count % 50 == 0:
             rospy.logwarn(
@@ -491,10 +519,10 @@ def run_trial(robot, kin_tool, kin_flange,
     # 重置积分器状态 (进入 Phase 2)
     sigma_f_int.reset()
     integ_euler = np.zeros(3)
+    force_filter.reset(F_z)
 
     # ---- Phase 1.5: 接触调整 ----
-    # 刚接触后先在扫描起点保持 x 不动，让恒力、RCM 和自适应 scan_z_ref 收敛；
-    # 该阶段不写入主 logger，避免把接触震荡混入正式实验数据。
+    # 真机接触瞬间的力控/RCM/滤波收敛只用于热身，不保存到正式扫描数据。
     rospy.loginfo("  Phase 1.5: Contact/RCM adjustment (not logged)...")
     x_cur = cfg.scan_start_x
     scan_z_ref = z_contact
@@ -539,9 +567,21 @@ def run_trial(robot, kin_tool, kin_flange,
         delta_dot, delta_dot_raw, delta_dot_fd = delta_dot_est.update(
             delta, loop_dt, raw_delta_dot=-tv[2]
         )
-        F_z, wrench, force_source, sensor_available = read_contact_force(
+        if venv is not None:
+            K_env_true, B_env_true = venv.get_stiffness(tp[0])
+        else:
+            K_env_true, B_env_true = 0.0, 0.0
+        F_raw, wrench, force_source, sensor_available = read_contact_force(
             force_sensor, venv, tp[0], delta, delta_dot
         )
+        F_z = float(force_filter.update(F_raw, loop_dt))
+        if not sensor_available and venv is None and not cfg.allow_sensorless_approach:
+            rospy.logwarn(
+                f"  Force sensor data lost during adjustment "
+                f"(source={force_source}, F={F_z:.3f}N)."
+            )
+            return False
+
         K_hat, B_hat = est.update(abs(F_z), delta, delta_dot)
 
         F_actual = abs(F_z)
@@ -666,11 +706,12 @@ def run_trial(robot, kin_tool, kin_flange,
         if adjust_t - adjust_last_log >= 0.5:
             adjust_last_log = adjust_t
             rospy.loginfo(
-                f"  adjusting | t={adjust_t:.2f}s, F={F_actual:.3f}N, "
-                f"F_std={force_std:.3f}, F_slope={force_slope:.3f}N/s, "
-                f"err={pos_track_err*1000:.2f}mm, rcm={error[0]*1000:.2f}mm, "
-                f"rcm_std={rcm_std*1000:.3f}mm, z_ref={scan_z_ref:.4f}, "
-                f"alpha={alpha:.2f}, K={K_hat:.1f}, B={B_hat:.2f}"
+                f"  adjusting | t={adjust_t:.2f}s, F={F_actual:.3f}N "
+                f"(raw={F_raw:.3f}, {force_source}), F_std={force_std:.3f}, "
+                f"F_slope={force_slope:.3f}N/s, err={pos_track_err*1000:.2f}mm, "
+                f"rcm={error[0]*1000:.2f}mm, rcm_std={rcm_std*1000:.3f}mm, "
+                f"z_ref={scan_z_ref:.4f}, alpha={alpha:.2f}, K={K_hat:.1f}, "
+                f"B={B_hat:.2f}"
             )
 
         if stable:
@@ -720,9 +761,16 @@ def run_trial(robot, kin_tool, kin_flange,
             K_env_true, B_env_true = venv.get_stiffness(tp[0])
         else:
             K_env_true, B_env_true = 0.0, 0.0
-        F_z, wrench, force_source, sensor_available = read_contact_force(
+        F_raw, wrench, force_source, sensor_available = read_contact_force(
             force_sensor, venv, tp[0], delta, delta_dot
         )
+        F_z = float(force_filter.update(F_raw, loop_dt))
+        if not sensor_available and venv is None and not cfg.allow_sensorless_approach:
+            rospy.logwarn(
+                f"  Force sensor data lost during scan "
+                f"(source={force_source}, F={F_z:.3f}N). Stop and save partial data."
+            )
+            break
 
         # 环境估计
         K_hat, B_hat = est.update(
@@ -900,7 +948,7 @@ def run_trial(robot, kin_tool, kin_flange,
         robot.exec_torque_cmd(tau)
 
         # 推进扫描参考
-        x_cur += scan_vx_cmd * dt
+        x_cur += scan_vx_cmd * loop_dt
 
         # 6 个核心物理量
         pos_tool = tp.copy()
@@ -919,7 +967,7 @@ def run_trial(robot, kin_tool, kin_flange,
                 f"des=[{pos_tool_des[0]*1000:6.2f},{pos_tool_des[1]*1000:6.2f},{pos_tool_des[2]*1000:6.2f}]mm | "
                 f"err={pos_err_norm*1000:5.2f}mm | "
                 f"rcm={rcm_err*1000:5.2f}mm | "
-                f"F={F_actual:.3f}N (des={F_desired:.3f}, err={F_err:+.3f}) | "
+                f"F={F_actual:.3f}N (des={F_desired:.3f}, err={F_err:+.3f}, raw={F_raw:.3f}) | "
                 f"α={alpha:.2f} | vx={scan_vx_cmd*1000:.2f}mm/s | "
                 f"source={force_source}"
             )
@@ -934,6 +982,7 @@ def run_trial(robot, kin_tool, kin_flange,
             pos_des=pos_tool_des,
             pos_err=pos_err,
             F_measured=F_actual, F_desired=F_desired, F_err=F_err,
+            F_raw=F_raw,
             wrench=wrench,
             force_source=force_source,
             sensor_available=int(sensor_available),
@@ -1051,24 +1100,44 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--strategy', default='continuous_force_margin')
     ap.add_argument('--trials', type=int, default=1)
-    ap.add_argument('--output-dir', default='results')
+    ap.add_argument(
+        '--output-dir',
+        default='/home/liu/franka_ws_1101/results',
+        help='实验结果根目录，默认保存到工作空间级 results',
+    )
     ap.add_argument('--gains-file', default=None)
     ap.add_argument('--controller-mode', default='are',
                     choices=['are', 'pareto_iter'],
                     help='are: 原 4D ARE 查表; pareto_iter: Algorithm 2 迭代 P1/P2')
-    ap.add_argument('--force-topic', default='/force_sensor/wrench')
+    ap.add_argument('--use-virtual-env', dest='use_virtual_env',
+                    action='store_true', default=False,
+                    help='启用虚拟接触环境回退 (真机默认关闭)')
+    ap.add_argument('--no-virtual-env', dest='use_virtual_env',
+                    action='store_false',
+                    help='关闭虚拟接触环境')
+    ap.add_argument('--force-port', default='/dev/ttyUSB0')
+    ap.add_argument('--force-baudrate', type=int, default=460800)
+    ap.add_argument('--force-serial-timeout', type=float, default=0.05)
     ap.add_argument('--force-timeout', type=float, default=0.02,
-                    help='force topic freshness window; 0.02s matches a 1kHz publisher with margin')
-    ap.add_argument('--force-axis', type=int, default=2)
+                    help='direct sensor freshness window; 0.02s matches 1kHz streaming with margin')
+    ap.add_argument('--force-axis', type=int, default=Config.force_axis)
     ap.add_argument('--force-sign', type=float, default=1.0)
     ap.add_argument('--force-wait-timeout', type=float, default=2.0)
-    ap.add_argument('--force-expected-rate', type=float, default=1000.0)
-    ap.add_argument('--force-node-command-format', default='both')
-    ap.add_argument('--force-node-data-source', default='0x33')
-    ap.add_argument('--force-node-streaming', dest='force_node_streaming',
+    ap.add_argument('--force-command-format', default='both')
+    ap.add_argument('--force-data-source', default='0x33')
+    ap.add_argument('--force-streaming', dest='force_streaming',
                     action='store_true', default=True)
-    ap.add_argument('--no-force-node-streaming', dest='force_node_streaming',
+    ap.add_argument('--no-force-streaming', dest='force_streaming',
                     action='store_false')
+    ap.add_argument('--force-poll-hz', type=float, default=100.0)
+    ap.add_argument('--force-output-units', choices=['N', 'kgf'], default='N')
+    ap.add_argument('--force-tare-on-start', dest='force_tare_on_start',
+                    action='store_true', default=True)
+    ap.add_argument('--no-force-tare-on-start', dest='force_tare_on_start',
+                    action='store_false')
+    ap.add_argument('--force-tare-settle-s', type=float, default=1.0)
+    ap.add_argument('--allow-sensorless-approach', action='store_true',
+                    help='允许无传感器数据时继续下降，仅用于虚拟/离线调试')
     ap.add_argument('--no-force-sensor', action='store_true')
     ap.add_argument('--no-auto-plot', action='store_true',
                     help='实验结束后不自动调用绘图脚本')
@@ -1088,6 +1157,7 @@ def main():
     rospy.sleep(1.0)
 
     cfg = Config()
+    cfg.allow_sensorless_approach = bool(args.allow_sensorless_approach)
     ctrl = CooperativeGameController(control_mode=args.controller_mode)
     rospy.loginfo(f"Controller mode: {args.controller_mode}")
 
@@ -1106,7 +1176,7 @@ def main():
         Ke_vals = sorted(set(
             [v[2] for v in cfg.stiffness_zones]
             + [50, 80, 100, 150, 200, 300, 500, 800, 1000, 1500,
-               2000, 3000, 5000]
+               2000, 3000, 5000, cfg.estimator_initial_K]
         ))
         ctrl.precompute_gains(
             alpha_grid=np.linspace(0.0, 1.0, 21),
@@ -1120,30 +1190,52 @@ def main():
         ctrl.save_gains(gpath)
         rospy.loginfo(f"Saved gains to {gpath}")
 
-    venv = VirtualStiffnessSurface(cfg.stiffness_zones)
+    venv = VirtualStiffnessSurface(cfg.stiffness_zones) \
+        if args.use_virtual_env else None
+    rospy.loginfo(
+        f"Virtual environment fallback: {'enabled' if venv is not None else 'disabled'}"
+    )
     force_sensor = None
     if not args.no_force_sensor:
-        force_sensor = ForceSensorInput(
-            topic=args.force_topic,
-            timeout=args.force_timeout,
-            force_axis=args.force_axis,
-            force_sign=args.force_sign,
-        )
-        got_first_frame = force_sensor.wait_for_data(args.force_wait_timeout)
-        rospy.loginfo(
-            f"Force sensor topic: {args.force_topic}, "
-            f"axis={args.force_axis}, sign={args.force_sign}, "
-            f"timeout={args.force_timeout}s; expected_rate={args.force_expected_rate:g}Hz; "
-            f"node_format={args.force_node_command_format}, "
-            f"data_source={args.force_node_data_source}, streaming={args.force_node_streaming}; "
-            f"first_frame={got_first_frame}, seq={force_sensor.seq()}, "
-            f"age={force_sensor.age():.4f}s; virtual env fallback enabled"
-        )
+        data_source = int(str(args.force_data_source), 0)
+        try:
+            force_sensor = DirectForceSensorInput(
+                port=args.force_port,
+                baudrate=args.force_baudrate,
+                serial_timeout=args.force_serial_timeout,
+                freshness_timeout=args.force_timeout,
+                force_axis=args.force_axis,
+                force_sign=args.force_sign,
+                command_format=args.force_command_format,
+                data_source_cmd=data_source,
+                use_streaming=args.force_streaming,
+                output_units=args.force_output_units,
+                tare_on_start=args.force_tare_on_start,
+                tare_settle_s=args.force_tare_settle_s,
+                poll_hz=args.force_poll_hz,
+            )
+        except Exception as exc:
+            rospy.logerr(f"Direct force sensor init failed: {exc}")
+            force_sensor = None
+        if force_sensor is not None:
+            got_first_frame = force_sensor.wait_for_data(args.force_wait_timeout)
+            rospy.loginfo(
+                f"Direct force sensor: {force_sensor.port} @ {force_sensor.baudrate}, "
+                f"axis={force_sensor.force_axis}, sign={force_sensor.force_sign}, "
+                f"timeout={force_sensor.timeout}s, command_format={force_sensor.command_format}, "
+                f"data_source=0x{data_source:02X}, streaming={force_sensor.use_streaming}, "
+                f"detected_format={force_sensor.detected_format}; "
+                f"first_frame={got_first_frame}, seq={force_sensor.seq()}, "
+                f"age={force_sensor.age():.4f}s"
+            )
     else:
-        rospy.loginfo("Force sensor disabled; using virtual env fallback only")
+        rospy.logwarn(
+            "Direct force sensor disabled; force will be zero unless "
+            "--use-virtual-env is enabled."
+        )
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    odir = os.path.join(args.output_dir, f"rcm_{stamp}")
+    odir = os.path.join(args.output_dir, f"rcm_real_{stamp}")
     os.makedirs(odir, exist_ok=True)
 
     names = list(STRATEGIES.keys()) if args.strategy == 'all' else [args.strategy]
@@ -1155,7 +1247,10 @@ def main():
                 break
             lg = DataLogger()
             approach_lg = DataLogger()
-            est = EnvironmentEstimator()
+            est = EnvironmentEstimator(
+                theta_init=[cfg.estimator_initial_K, cfg.estimator_initial_B],
+                alpha_lp=cfg.estimator_alpha_lp,
+            )
             s.reset()
             ok = run_trial(
                 robot, kin_tool, kin_flange,
@@ -1174,6 +1269,8 @@ def main():
     rospy.loginfo(f"\nResults → {odir}")
     if not args.no_auto_plot:
         auto_plot_results(odir, no_show=args.plot_no_show)
+    if force_sensor is not None:
+        force_sensor.close()
 
 
 if __name__ == '__main__':
