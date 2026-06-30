@@ -1,0 +1,63 @@
+{
+    "latex-workshop.latex.outDir": "%DIR%/compiled_pdfs",
+    "latex-workshop.latex.autoBuild.run": "onSave",
+    "latex-workshop.latex.recipe.default": "latexmk (TeX Live 2026 xelatex)",
+    "latex-workshop.latex.recipes": [
+        {
+            "name": "latexmk (TeX Live 2026 xelatex)",
+            "tools": [
+                "latexmk-texlive2026"
+            ]
+        }
+    ],
+    "latex-workshop.latex.tools": [
+        {
+            "name": "latexmk-texlive2026",
+            "command": "/home/liu/franka_ws_1101/.texlive/2026/bin/x86_64-linux/latexmk",
+            "args": [
+                "-cd",
+                "-xelatex",
+                "-interaction=nonstopmode",
+                "-file-line-error",
+                "-synctex=1",
+                "-outdir=%OUTDIR%",
+                "%DOC%"
+            ]
+        }
+    ],
+    "latex-workshop.view.pdf.viewer": "tab",
+    "latex-workshop.synctex.afterBuild.enabled": true,
+    "latex-workshop.latex.clean.fileTypes": [
+        "*.aux",
+        "*.bbl",
+        "*.blg",
+        "*.fdb_latexmk",
+        "*.fls",
+        "*.log",
+        "*.lof",
+        "*.lot",
+        "*.out",
+        "*.synctex.gz",
+        "*.toc",
+        "*.xdv"
+    ],
+    "files.watcherExclude": {
+        "**/.git/objects/**": true,
+        "**/__pycache__/**": true,
+        "**/compiled_pdfs/**": true,
+        "**/*.aux": true,
+        "**/*.bbl": true,
+        "**/*.blg": true,
+        "**/*.fdb_latexmk": true,
+        "**/*.fls": true,
+        "**/*.log": true,
+        "**/*.out": true,
+        "**/*.synctex.gz": true,
+        "**/*.toc": true,
+        "**/*.xdv": true
+    },
+    "search.exclude": {
+        "**/__pycache__": true,
+        "**/compiled_pdfs": true
+    }
+}

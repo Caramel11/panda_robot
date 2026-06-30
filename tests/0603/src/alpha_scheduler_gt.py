@@ -513,20 +513,34 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
     对 no-RCM 扫描而言，力误差和边界裕度安全时应优先修正几毫米量级的
     横向轨迹滞后，因此额外加入 safe-tracking boost:
       - 力处于安全裕度内且 |F-Fd| 很小时，提高 alpha 下限；
-      - 低力/高力边界仍由原 guard 规则直接覆盖。
+      - 高力风险提高位置权重以抑制振荡，低力风险才小幅降低 alpha。
     """
 
     def __init__(self, dt=0.01, F_min=0.2, F_max=1.0,
                  F_desired=0.5, phase_prior=None,
-                 safe_tracking_alpha=0.78,
-                 safe_tracking_extra=0.04,
+                 safe_tracking_alpha=0.84,
+                 safe_tracking_extra=0.05,
                  safe_margin_start=0.45,
                  safe_margin_full=0.75,
                  force_error_start=0.04,
                  force_error_full=0.12,
+                 force_error_hard=0.35,
                  track_error_start=0.001,
                  track_error_full=0.003,
+                 force_balance_alpha=0.84,
+                 force_guard_alpha=0.92,
+                 low_force_guard_alpha=0.72,
+                 risk_margin_start=0.35,
+                 risk_margin_full=0.10,
+                 phase_contact_threshold=0.3,
+                 stiffness_alpha_enabled=False,
+                 stiffness_low_threshold=250.0,
+                 stiffness_high_threshold=1000.0,
+                 stiffness_low_alpha=0.45,
+                 stiffness_high_alpha=0.90,
+                 stiffness_blend=0.0,
                  **kwargs):
+        kwargs.setdefault("smooth_tau", 0.12)
         super().__init__(
             dt=dt,
             F_min=F_min,
@@ -536,7 +550,7 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
         )
         self.name = "continuous_force_margin_alpha"
         self.phase_prior = phase_prior or ContinuousPhasePrior(
-            F_thresh=F_min,
+            F_thresh=min(F_min, phase_contact_threshold),
             T_transient=1.0,
         )
         self.phase_prior_history = []
@@ -546,8 +560,25 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
         self.safe_margin_full = float(max(safe_margin_full, safe_margin_start + 1e-6))
         self.force_error_start = float(force_error_start)
         self.force_error_full = float(max(force_error_full, force_error_start + 1e-6))
+        self.force_error_hard = float(max(force_error_hard, self.force_error_full + 1e-6))
         self.track_error_start = float(track_error_start)
         self.track_error_full = float(max(track_error_full, track_error_start + 1e-6))
+        self.force_balance_alpha = float(force_balance_alpha)
+        self.force_guard_alpha = float(force_guard_alpha)
+        self.low_force_guard_alpha = float(low_force_guard_alpha)
+        self.risk_margin_start = float(risk_margin_start)
+        self.risk_margin_full = float(min(risk_margin_full, risk_margin_start - 1e-6))
+        self.phase_contact_threshold = float(phase_contact_threshold)
+        self.stiffness_alpha_enabled = bool(stiffness_alpha_enabled)
+        self.stiffness_low_threshold = float(stiffness_low_threshold)
+        self.stiffness_high_threshold = float(max(
+            stiffness_high_threshold,
+            stiffness_low_threshold + 1e-6,
+        ))
+        self.stiffness_low_alpha = float(stiffness_low_alpha)
+        self.stiffness_high_alpha = float(stiffness_high_alpha)
+        self.stiffness_blend = float(np.clip(stiffness_blend, 0.0, 1.0))
+        self._alpha_filt = self.safe_tracking_alpha
 
     def _compute_phase_prior(self, phase, F_norm, z_vel):
         alpha_phi, w_phi = self.phase_prior.update(F_norm, z_vel, self.dt)
@@ -576,6 +607,74 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
         alpha_track = float(np.clip(alpha_track, self.alpha_min, self.alpha_max))
         return float(alpha_safe + gate * max(0.0, alpha_track - alpha_safe))
 
+    def _force_risk_rebalance(self, alpha_safe, rho_F, F_err):
+        """按力边界方向做非对称 alpha 修正。
+
+        no-RCM 固定 z 扫描中，高力峰值通常来自 tool 偏离参考平面和横向振荡。
+        因此上边界风险升高时不降低 alpha，而是平滑提高位置权重；低力风险时
+        才小幅降低 alpha，给力控留出补偿空间。
+        """
+        margin_risk = 1.0 - _smoothstep(
+            (rho_F - self.risk_margin_full)
+            / (self.risk_margin_start - self.risk_margin_full)
+        )
+        pos_err_gate = _smoothstep(
+            (F_err - self.force_error_start)
+            / (self.force_error_hard - self.force_error_start)
+        )
+        neg_err_gate = _smoothstep(
+            (-F_err - self.force_error_start)
+            / (self.force_error_hard - self.force_error_start)
+        )
+        high_gate = max(pos_err_gate, margin_risk if F_err > 0.0 else 0.0)
+        low_gate = max(neg_err_gate, margin_risk if F_err < 0.0 else 0.0)
+
+        alpha = float(alpha_safe)
+        if high_gate > 1e-9:
+            alpha_high = (
+                (1.0 - high_gate) * self.force_balance_alpha
+                + high_gate * self.force_guard_alpha
+            )
+            alpha_target = max(alpha, alpha_high)
+            alpha = (1.0 - high_gate) * alpha + high_gate * alpha_target
+        if low_gate > 1e-9:
+            alpha_low = (
+                (1.0 - low_gate) * self.force_balance_alpha
+                + low_gate * self.low_force_guard_alpha
+            )
+            alpha = (1.0 - low_gate) * alpha + low_gate * alpha_low
+        return float(np.clip(alpha, self.alpha_min, self.alpha_max))
+
+    def _stiffness_rebalance(self, alpha_safe, K_hat):
+        """根据估计刚度平滑调节 z 向 alpha 目标。
+
+        低刚度段需要更强力调节来补偿压入力不足；高刚度段更容易因微小
+        z 误差产生过大接触力，因此提高位置/RCM 权重。该项默认关闭，
+        只在需要凸显刚度适应性的 benchmark 中启用。
+        """
+        if (
+            not self.stiffness_alpha_enabled
+            or self.stiffness_blend <= 1e-9
+            or K_hat is None
+            or not np.isfinite(K_hat)
+        ):
+            return alpha_safe
+
+        k_gate = _smoothstep(
+            (float(K_hat) - self.stiffness_low_threshold)
+            / (self.stiffness_high_threshold - self.stiffness_low_threshold)
+        )
+        alpha_k = (
+            (1.0 - k_gate) * self.stiffness_low_alpha
+            + k_gate * self.stiffness_high_alpha
+        )
+        alpha_k = float(np.clip(alpha_k, self.alpha_min, self.alpha_max))
+        alpha = (
+            (1.0 - self.stiffness_blend) * float(alpha_safe)
+            + self.stiffness_blend * alpha_k
+        )
+        return float(np.clip(alpha, self.alpha_min, self.alpha_max))
+
     def compute(self, F_norm, e_f=0.0, K_hat=None, e_r=0.0, z_vel=0.0,
                 de_f=0.0, dK=0.0, de_r=0.0, F_desired=None,
                 F_min=None, F_max=None, tracking_boost_enabled=True, **unused):
@@ -599,23 +698,23 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
             + self.k_upper * r_F * max(s_F, 0.0)
             - self.k_lower * r_F * max(-s_F, 0.0)
         )
-        if F_norm >= F_max:
-            alpha_safe = max(alpha_safe, self.upper_guard_alpha)
-        elif F_norm <= F_min:
-            alpha_safe = min(alpha_safe, self.lower_guard_alpha)
+        if F_norm >= F_max or F_norm <= F_min:
+            alpha_safe = self._force_risk_rebalance(
+                alpha_safe, rho_F=rho_F, F_err=F_err
+            )
         elif tracking_boost_enabled:
             alpha_safe = self._safe_tracking_boost(
                 alpha_safe, rho_F=rho_F, F_err=F_err, e_r=e_r
             )
+            alpha_safe = self._force_risk_rebalance(
+                alpha_safe, rho_F=rho_F, F_err=F_err
+            )
+        alpha_safe = self._stiffness_rebalance(alpha_safe, K_hat)
         alpha_safe = float(np.clip(alpha_safe, self.alpha_min, self.alpha_max))
 
         alpha_raw = w_phi * alpha_phi + (1.0 - w_phi) * alpha_safe
         alpha_raw = float(np.clip(alpha_raw, 0.01, 0.99))
         alpha = self._alpha_filt + self.smooth_beta * (alpha_raw - self._alpha_filt)
-        if F_norm >= F_max:
-            alpha = max(alpha, self.upper_guard_alpha)
-        elif F_norm <= F_min:
-            alpha = min(alpha, self.lower_guard_alpha)
         alpha = float(np.clip(alpha, 0.01, 0.99))
         self._alpha_filt = alpha
 
@@ -633,6 +732,7 @@ class ContinuousForceMarginFuzzyAlphaScheduler(ForceMarginFuzzyAlphaScheduler):
         super().reset()
         self.phase_prior.reset()
         self.phase_prior_history = []
+        self._alpha_filt = self.safe_tracking_alpha
 
 
 class OnlinePriorityAdaptationAlphaScheduler:

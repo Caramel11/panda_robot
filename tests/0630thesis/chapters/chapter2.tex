@@ -1,0 +1,394 @@
+% !TeX root = ../main_ustc.tex
+\chapter{预备知识}
+\label{chap:preliminaries}
+
+本章回顾后续章节所需的机器人学、接触建模、最优控制、微分博弈以及稳定性分析基础。章节内容定位为通识性理论准备，不引入第三章和第四章的具体控制算法。第三章将在本章给出的机器人运动学、动力学和最优控制基础上研究刚性约束操作中的人机合作共享控制；第四章将在接触建模和鲁棒性分析工具基础上进一步研究柔性接触任务中的力--位协同控制。为避免符号混用，本章同时给出全文主要变量的统一约定。
+
+\section{机器人运动学与动力学}
+\label{sec:ch2_robotics}
+
+机器人运动学描述关节变量与末端位姿之间的几何关系，动力学描述关节力矩、惯性、重力、外部作用力与运动之间的关系。相关基础在机器人学手册和操作空间控制文献中已有系统总结\cite{siciliano2008springer}。对于受约束机器人操作任务，运动学为几何约束建模提供基础，动力学为控制器设计和稳定性分析提供对象。
+
+首先从刚体运动学关系说起。
+\label{subsec:ch2_kinematics}
+
+设机械臂具有 $n_q$ 个自由度，关节位置、速度和加速度分别记为 $q,\dot q,\ddot q\in\R^{n_q}$。任务空间变量记为 $x\in\R^m$，其中 $m$ 表示任务空间维数。若仅考虑末端平移运动，通常取 $m=3$；若同时考虑位置和姿态，可取 $m=6$。机械臂正运动学映射可表示为
+\begin{equation}
+  x=\Phi(q),
+  \label{eq:ch2_forward_kinematics}
+\end{equation}
+其中 $\Phi(\cdot)$ 为由关节空间到任务空间的非线性映射。对\eqref{eq:ch2_forward_kinematics}求导得到速度关系
+\begin{equation}
+  \dot x=J(q)\dot q,
+  \label{eq:ch2_jacobian_velocity}
+\end{equation}
+其中 $J(q)\in\R^{m\times n_q}$ 为机械臂雅可比矩阵。进一步求导得到加速度关系
+\begin{equation}
+  \ddot x=J(q)\ddot q+\dot J(q,\dot q)\dot q .
+  \label{eq:ch2_jacobian_acceleration}
+\end{equation}
+式中 $\dot J(q,\dot q)\dot q$ 表示雅可比矩阵随关节运动变化而产生的速度相关项。
+
+\begin{definition}[任务空间与误差变量]
+\label{def:ch2_task_error}
+任务空间期望轨迹记为 $x_d(t)$，其速度和加速度分别为 $\dot x_d(t)$ 和 $\ddot x_d(t)$。任务空间位置误差和速度误差定义为
+\begin{equation}
+  e_x(t)=x(t)-x_d(t),\qquad e_v(t)=\dot x(t)-\dot x_d(t).
+  \label{eq:ch2_basic_errors}
+\end{equation}
+在第三章中，刚性约束共享控制主要使用位置--速度误差状态；在第四章中，柔性接触控制将在该误差基础上进一步引入力误差和力误差积分状态。
+\end{definition}
+
+在运动学关系明确后，进一步考虑机械臂动力学模型。
+\label{subsec:ch2_dynamics}
+
+机械臂关节空间动力学通常写为
+\begin{equation}
+  M_q(q)\ddot q+C_q(q,\dot q)\dot q+G_q(q)=\tau+\tau_{\mathrm{ext}},
+  \label{eq:ch2_joint_dynamics}
+\end{equation}
+其中 $M_q(q)\in\R^{n_q\times n_q}$ 为关节空间惯性矩阵，$C_q(q,\dot q)\dot q$ 为科氏力和离心力项，$G_q(q)$ 为重力项，$\tau\in\R^{n_q}$ 为关节驱动力矩，$\tau_{\mathrm{ext}}\in\R^{n_q}$ 为外部作用力映射到关节空间后的广义力矩。若任务空间广义力或六维广义力 记为 $w$，则由虚功原理得到
+\begin{equation}
+  \tau_{\mathrm{ext}}=J^T(q)w .
+  \label{eq:ch2_jacobian_transpose}
+\end{equation}
+该关系也是后续将任务空间控制输入转换为关节力矩的基础。
+
+\begin{assumption}[机械臂模型的正则性]
+\label{ass:ch2_robot_regular}
+在本文考虑的工作空间内，惯性矩阵 $M_q(q)$ 一致正定；矩阵 $M_q(q)$、$C_q(q,\dot q)$、$G_q(q)$ 以及雅可比矩阵 $J(q)$ 关于其自变量连续。机械臂运动范围避开运动学奇异区域，使得所需任务空间映射在局部有定义。
+\end{assumption}
+
+\begin{remark}
+\cref{ass:ch2_robot_regular} 是机械臂控制分析中的常用基本条件。它不要求得到完全精确的动力学参数，而是要求机器人在实验工作区间内具有良好的运动学和动力学正则性。
+\end{remark}
+
+由于后续控制目标主要在任务空间中给定，还需要把关节空间动力学转写到任务空间。
+\label{subsec:ch2_task_dynamics}
+
+在机器人操作任务中，控制目标通常直接给定在任务空间。由关节空间动力学和雅可比映射可得到任务空间动力学的一般形式
+\begin{equation}
+  M_x(q)\ddot x+C_x(q,\dot q)\dot x+G_x(q)=u_x+f_{\mathrm{ext}},
+  \label{eq:ch2_task_dynamics}
+\end{equation}
+其中 $M_x(q)$ 为任务空间惯性矩阵，$C_x(q,\dot q)\dot x$ 为任务空间速度相关项，$G_x(q)$ 为任务空间重力项，$u_x$ 为任务空间控制输入，$f_{\mathrm{ext}}$ 为环境或人机交互产生的外部作用力。对于高带宽内环已经完成重力补偿和低层伺服的机器人，也可在工作点附近将任务空间误差模型抽象为
+\begin{equation}
+  \dot x_s=A_sx_s+B_su,
+  \label{eq:ch2_general_state_space}
+\end{equation}
+其中 $x_s$ 为一般系统状态，$u$ 为控制输入，$A_s$ 和 $B_s$ 为相应的系统矩阵。后续章节中的合作博弈控制律和稳定性分析均以这类状态空间模型为基础。
+
+\begin{definition}[全文核心状态符号]
+\label{def:ch2_core_states}
+为区分后续章节的建模对象，本文规定第三章使用
+\begin{equation}
+  z=\begin{bmatrix}e_x^T & e_v^T\end{bmatrix}^T
+  \label{eq:ch2_state_z}
+\end{equation}
+表示刚性约束共享控制状态。第四章使用
+\begin{equation}
+  \xi=\begin{bmatrix}e_p^T & e_v^T & e_f^T & \sigma_f^T\end{bmatrix}^T
+  \label{eq:ch2_state_xi}
+\end{equation}
+表示柔性接触力--位增广状态，其中 $e_p$ 为位置误差，$e_f$ 为接触力误差，$\sigma_f$ 为力误差泄漏积分状态。符号 $z$ 和 $\xi$ 在本文中不混用。
+\end{definition}
+
+\section{约束运动与接触建模}
+\label{sec:ch2_constraints_contact}
+
+受约束机器人操作需要同时处理运动轨迹、几何约束和环境交互。几何约束通常来自工具、工装或操作通道，接触约束则来自机器人与环境之间的力学作用。本节回顾几何约束、阻抗控制和环境接触模型，为第三章和第四章提供统一的建模语言。
+
+进入约束建模时，先考虑由工具、工装或操作通道引入的几何约束。
+\label{subsec:ch2_geometric_constraints}
+
+在受约束操作任务中，机器人末端运动不仅需要满足期望轨迹，还需要满足由环境、工具或操作通道引入的几何约束。常见形式包括固定点约束、工具轴线约束、表面法向约束和远心运动约束。一般约束可写为
+\begin{equation}
+  h(x,q,t)=0,
+  \label{eq:ch2_general_constraint}
+\end{equation}
+其中 $h(\cdot)$ 为约束函数，$x$ 为任务空间变量，$q$ 为关节变量。若约束表现为固定点与工具轴线之间的距离约束，可定义
+\begin{equation}
+  e_c(t)=\dist(p_c,\ell(t)),
+  \label{eq:ch2_constraint_error}
+\end{equation}
+其中 $p_c\in\R^3$ 为固定约束点，$\ell(t)$ 为工具轴线，$\dist(\cdot)$ 表示点到直线的欧氏距离。
+
+\begin{definition}[固定点--轴线几何约束]
+\label{def:ch2_fixed_point_axis}
+若机器人末端工具轴线 $\ell(t)$ 需要经过固定点 $p_c$，则称该操作满足固定点--轴线几何约束。约束误差由\eqref{eq:ch2_constraint_error}给出。当 $e_c(t)=0$ 时，工具轴线严格通过固定点；当 $e_c(t)$ 有界且足够小时，几何约束在允许误差范围内得到保持。
+\end{definition}
+
+\begin{remark}
+微创手术中的远心运动约束是固定点--轴线几何约束的一种典型形式。工业装配中的导向孔约束、深腔工具操作中的通道约束也可用类似方式描述。第三章和第四章会根据具体任务给出相应的执行映射。
+\end{remark}
+
+在几何约束之外，接触与人机交互还要求机器人具有可调柔顺性，阻抗控制提供了这一基础。
+\label{subsec:ch2_impedance}
+
+机器人与环境接触或与操作者交互时，单纯的位置控制容易产生较大的交互力。阻抗控制通过指定运动误差与外部力之间的动态关系，使机器人表现出期望的柔顺特性。典型任务空间阻抗模型为
+\begin{equation}
+  M_d(\ddot x-\ddot x_d)+D_d(\dot x-\dot x_d)+K_d(x-x_d)=f_{\mathrm{ext}},
+  \label{eq:ch2_impedance}
+\end{equation}
+其中 $M_d\succ0$、$D_d\succ0$ 和 $K_d\succeq0$ 分别为期望惯性、阻尼和刚度矩阵，$f_{\mathrm{ext}}$ 为外部作用力。
+
+\begin{definition}[任务空间阻抗]
+\label{def:ch2_impedance}
+若机器人末端在外力作用下满足形如\eqref{eq:ch2_impedance}的力--运动动态关系，则称该机器人在任务空间呈现由 $M_d$、$D_d$ 和 $K_d$ 描述的机械阻抗。阻抗矩阵决定了机器人在交互过程中的柔顺性和响应速度。
+\end{definition}
+
+阻抗控制并不直接指定接触力，而是规定力与运动之间的动态关系。在本文中，第三章借助阻抗型任务空间模型描述共享控制对象，第四章在阻抗动力学基础上进一步引入力误差状态，以处理柔性环境中的力--位协同问题。
+
+接下来给出本文用于柔性环境近似的接触模型。
+\label{subsec:ch2_contact_model}
+
+在局部接触范围内，柔性环境常用开尔文--沃伊特模型近似描述。其基本形式为
+\begin{equation}
+  f_e=K_e\delta+B_e\dot\delta+\Delta_f,
+  \label{eq:ch2_kelvin_voigt}
+\end{equation}
+其中 $f_e$ 为环境接触力，$K_e\succeq0$ 为等效刚度矩阵，$B_e\succeq0$ 为等效阻尼矩阵，$\delta$ 为压入量，$\dot\delta$ 为压入速度，$\Delta_f$ 表示未建模非线性、参数变化和测量误差引起的接触模型误差。给定期望接触力 $f_d$，力误差定义为
+\begin{equation}
+  e_f=f_e-f_d .
+  \label{eq:ch2_force_error}
+\end{equation}
+为了减小静态误差并避免积分项无界增长，可采用泄漏积分状态
+\begin{equation}
+  \dot\sigma_f=e_f-\lambda_f\sigma_f,
+  \label{eq:ch2_leakage_integral}
+\end{equation}
+其中 $\sigma_f$ 为力误差泄漏积分状态，$\lambda_f>0$ 为泄漏系数。
+
+\begin{assumption}[接触模型的局部有界性]
+\label{ass:ch2_contact_bounded}
+在本文考虑的接触任务区间内，环境等效刚度和阻尼有界，接触模型误差 $\Delta_f$ 有界。若将参考轨迹变化、接触面运动、参数失配和传感噪声统一为残差项，则该残差项在局部紧集内有界。
+\end{assumption}
+
+\begin{remark}
+\cref{ass:ch2_contact_bounded} 不要求接触模型完全精确。第四章将利用该有界性分析忽略残差项和接触模型不准确时的控制性能误差。
+\end{remark}
+
+\section{最优控制与微分博弈}
+\label{sec:ch2_optimal_game}
+
+最优控制研究如何在满足系统动力学的条件下最小化性能指标。微分博弈进一步考虑多个参与方或多个目标共同作用于同一动态系统的情形。本文第三章将人侧目标和机器人侧目标视为合作博弈中的两个目标，第四章将位置目标和力目标视为多目标最优控制中的两个目标。
+
+在控制优化工具方面，先回顾线性二次型最优控制。
+\label{subsec:ch2_lqr}
+
+考虑线性系统
+\begin{equation}
+  \dot x_s=A_sx_s+B_su,
+  \label{eq:ch2_lqr_system}
+\end{equation}
+其中 $x_s\in\R^n$ 为一般系统状态，$u\in\R^m$ 为控制输入。无限时域二次型代价为
+\begin{equation}
+  J(x_s(0),u)=\int_0^\infty\left(x_s^TQx_s+u^TRu\right)\dd t,
+  \label{eq:ch2_lqr_cost}
+\end{equation}
+其中 $Q\succeq0$ 为状态权重矩阵，$R\succ0$ 为控制权重矩阵。
+
+\begin{assumption}[线性二次型问题的可解性]
+\label{ass:ch2_lqr_solvable}
+矩阵对 $(A_s,B_s)$ 可镇定，矩阵对 $(Q^{1/2},A_s)$ 可检测，且 $R\succ0$。
+\end{assumption}
+
+\begin{lemma}[线性二次型最优反馈律]
+\label{lem:ch2_lqr}
+在\cref{ass:ch2_lqr_solvable}成立时，若 $P=P^T\succeq0$ 为代数黎卡提方程
+\begin{equation}
+  A_s^TP+PA_s-PB_sR^{-1}B_s^TP+Q=0
+  \label{eq:ch2_are}
+\end{equation}
+的稳定化解，则\eqref{eq:ch2_lqr_cost}的最优反馈律为
+\begin{equation}
+  u^*=-R^{-1}B_s^TPx_s .
+  \label{eq:ch2_lqr_law}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+取二次型值函数 $V(x_s)=x_s^TPx_s$。哈密顿--雅可比--贝尔曼方程为
+\begin{equation}
+  0=\min_u\left[x_s^TQx_s+u^TRu+\nabla V^T(A_sx_s+B_su)\right].
+\end{equation}
+由于 $\nabla V=2Px_s$，哈密顿函数关于 $u$ 的梯度为
+\begin{equation}
+  2Ru+2B_s^TPx_s .
+\end{equation}
+由 $R\succ0$ 可知该哈密顿函数关于 $u$ 严格凸，唯一极小点满足
+\begin{equation}
+  Ru+B_s^TPx_s=0 .
+\end{equation}
+因此得到\eqref{eq:ch2_lqr_law}。将该反馈律代回哈密顿--雅可比--贝尔曼方程，即得到\eqref{eq:ch2_are}。引理得证。
+\end{proof}
+
+在线性二次型最优控制之后，再引入能够描述多目标协同的微分博弈语言。
+\label{subsec:ch2_differential_game}
+
+微分博弈研究多个参与方在动态系统中共同决策的问题。一般系统可写为
+\begin{equation}
+  \dot x_s=f(x_s,u_1,u_2,\ldots,u_N,t),
+  \label{eq:ch2_game_system}
+\end{equation}
+其中 $u_i$ 为第 $i$ 个参与方的控制输入。第 $i$ 个参与方的性能指标可表示为
+\begin{equation}
+  J_i=\int_0^\infty g_i(x_s,u_1,u_2,\ldots,u_N,t)\dd t,
+  \label{eq:ch2_game_cost}
+\end{equation}
+其中 $g_i$ 为瞬时代价。根据参与方目标之间的关系，微分博弈可分为非合作博弈、零和博弈和合作博弈。
+
+\begin{definition}[合作微分博弈]
+\label{def:ch2_cooperative_game}
+若多个目标或参与方的代价函数可以通过共同优化准则进行协调，并且控制律的设计目标是得到满足整体性能折中的控制策略，则称该问题为合作微分博弈问题。常见处理方式是将多个代价函数加权合成为单一标量代价函数。
+\end{definition}
+
+为了描述多个目标之间的折中关系，还需要引入帕累托最优和折扣代价。
+\label{subsec:ch2_pareto_discount}
+
+考虑两个性能指标 $J_1$ 和 $J_2$。若不存在另一个可行控制律使两个性能指标均不变差且至少一个严格变好，则当前控制律称为帕累托有效。在线性加权方法中，可构造
+\begin{equation}
+  J_\alpha=\alpha J_1+(1-\alpha)J_2,
+  \qquad \alpha\in[0,1],
+  \label{eq:ch2_pareto_scalarization}
+\end{equation}
+其中 $\alpha$ 为权重参数。不同权重对应不同的性能折中。
+
+\begin{lemma}[加权代价的正定性]
+\label{lem:ch2_weight_positive}
+设 $Q_1\succeq0$、$Q_2\succeq0$、$R_1\succ0$、$R_2\succ0$，并令
+\begin{equation}
+  Q_\alpha=\alpha Q_1+(1-\alpha)Q_2,
+  \qquad
+  R_\alpha=\alpha R_1+(1-\alpha)R_2 .
+\end{equation}
+若 $\alpha\in[0,1]$，则 $Q_\alpha\succeq0$ 且 $R_\alpha\succ0$。
+\end{lemma}
+
+\begin{proof}
+对任意非零向量 $v$，有
+\begin{equation}
+  v^TR_\alpha v=\alpha v^TR_1v+(1-\alpha)v^TR_2v .
+\end{equation}
+由于 $R_1\succ0$、$R_2\succ0$ 且 $\alpha\in[0,1]$，上式严格大于零，因此 $R_\alpha\succ0$。同理，对任意向量 $v$，$v^TQ_\alpha v$ 为两个非负数的凸组合，故 $Q_\alpha\succeq0$。引理得证。
+\end{proof}
+
+折扣型无限时域代价定义为
+\begin{equation}
+  J_\gamma=\int_0^\infty \e^{-\gamma t}\left(x_s^TQx_s+u^TRu\right)\dd t,
+  \label{eq:ch2_discount_cost}
+\end{equation}
+其中 $\gamma>0$ 为折扣因子。相应的折扣黎卡提方程为
+\begin{equation}
+  A_s^TP+PA_s-PB_sR^{-1}B_s^TP+Q-\gamma P=0 .
+  \label{eq:ch2_discount_are}
+\end{equation}
+折扣因子使近期误差具有更高权重，也为存在扰动或残差项时的无限时域性能分析提供便利。
+
+\section{稳定性与鲁棒性分析}
+\label{sec:ch2_stability}
+
+控制器设计不仅需要给出反馈律，还需要说明闭环系统在理想模型、时变参数和模型误差下的稳定性或有界性。本节回顾李雅普诺夫方法、时变系统分析和扰动误差分析三个基本工具。
+
+稳定性分析首先从李雅普诺夫方法开始。
+\label{subsec:ch2_lyapunov}
+
+考虑非线性系统
+\begin{equation}
+  \dot x_s=f(x_s,t),
+  \label{eq:ch2_nonlinear_system}
+\end{equation}
+其中 $x_s=0$ 为平衡点。若存在连续可微函数 $V(x_s)$ 和正常数 $\underline p$、$\bar p$、$c$，满足
+\begin{equation}
+  \underline p\norm{x_s}^2\le V(x_s)\le \bar p\norm{x_s}^2,
+  \label{eq:ch2_lyap_bounds}
+\end{equation}
+并且
+\begin{equation}
+  \dot V(x_s)\le -c\norm{x_s}^2,
+  \label{eq:ch2_lyap_decay}
+\end{equation}
+则系统原点指数稳定。若仅有 $\dot V(x_s)\le0$，则可结合拉萨尔不变性原理分析渐近收敛性。
+
+\begin{lemma}[二次型李雅普诺夫函数的指数界]
+\label{lem:ch2_exp_bound}
+若\eqref{eq:ch2_lyap_bounds}和\eqref{eq:ch2_lyap_decay}成立，则系统状态满足
+\begin{equation}
+  \norm{x_s(t)}\le \sqrt{\frac{\bar p}{\underline p}}\exp\left(-\frac{c}{2\bar p}t\right)\norm{x_s(0)} .
+  \label{eq:ch2_exp_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+由\eqref{eq:ch2_lyap_bounds}可得 $\norm{x_s}^2\ge V/\bar p$。代入\eqref{eq:ch2_lyap_decay}有
+\begin{equation}
+  \dot V\le -\frac{c}{\bar p}V .
+\end{equation}
+由比较原理得到 $V(t)\le V(0)\exp(-ct/\bar p)$。再由 $\underline p\norm{x_s(t)}^2\le V(t)$ 和 $V(0)\le\bar p\norm{x_s(0)}^2$ 可得\eqref{eq:ch2_exp_bound}。引理得证。
+\end{proof}
+
+当控制权重随任务状态变化时，需要进一步考虑时变系统稳定性。
+\label{subsec:ch2_time_varying}
+
+在共享控制和多目标控制中，权重参数常随任务阶段、操作者输入或接触状态变化。考虑参数时变系统
+\begin{equation}
+  \dot x_s=A_{\mathrm{cl}}(\theta(t))x_s,
+  \label{eq:ch2_timevarying_system}
+\end{equation}
+其中 $\theta(t)$ 为时变参数。若存在参数依赖李雅普诺夫函数
+\begin{equation}
+  V(x_s,\theta)=x_s^TP(\theta)x_s,
+  \label{eq:ch2_param_lyap}
+\end{equation}
+且 $P(\theta)$ 一致正定，则可通过限制 $\dot\theta(t)$ 的变化速度获得稳定性条件。
+
+\begin{assumption}[时变参数的有界变化]
+\label{ass:ch2_slow_varying}
+参数 $\theta(t)$ 取值于紧集 $\Theta$，并且存在常数 $\bar v_\theta>0$，使得
+\begin{equation}
+  \norm{\dot\theta(t)}\le \bar v_\theta,
+  \quad \forall t\ge0 .
+\end{equation}
+\end{assumption}
+
+\begin{remark}
+后续章节中的动态仲裁权重均可视为时变参数。通过滤波、限幅和变化率约束，可以避免权重快速切换导致闭环系统性能恶化。
+\end{remark}
+
+最后，为后续处理接触残差和模型失配，给出扰动与模型误差的基本分析工具。
+\label{subsec:ch2_robustness}
+
+考虑含扰动系统
+\begin{equation}
+  \dot x_s=Ax_s+Bu+d(x_s,t),
+  \label{eq:ch2_disturbed_system}
+\end{equation}
+其中 $d(x_s,t)$ 为未建模动态、外部扰动或估计误差。若扰动满足
+\begin{equation}
+  \norm{d(x_s,t)}\le \bar d_0+\bar d_1\norm{x_s},
+  \label{eq:ch2_disturbance_bound}
+\end{equation}
+则可利用李雅普诺夫方法分析闭环系统的有界性。常用的杨氏不等式为
+\begin{equation}
+  2a^Tb\le \varepsilon\norm{a}^2+\frac{1}{\varepsilon}\norm{b}^2,
+  \qquad \varepsilon>0 .
+  \label{eq:ch2_young}
+\end{equation}
+当 $V(x_s)=x_s^TPx_s$ 时，扰动项对值函数导数的影响满足
+\begin{equation}
+  |\nabla V^Td|\le 2\norm{P}\norm{x_s}\norm{d(x_s,t)} .
+  \label{eq:ch2_residual_value}
+\end{equation}
+结合\eqref{eq:ch2_young}可将交叉项转化为状态二次项和扰动界的二次项。
+
+若系统矩阵存在参数误差，可写为
+\begin{equation}
+  A_{\mathrm{true}}=A_{\mathrm{nom}}+\Delta A .
+  \label{eq:ch2_A_perturbation}
+\end{equation}
+当标称闭环系统具有稳定裕度且 $\norm{\Delta A}$ 足够小时，黎卡提方程的稳定化解和最优反馈增益通常关于 $\Delta A$ 局部连续。第四章将利用这一思想分析接触模型不准确时的控制性能误差界。
+
+\section{本章小结}
+\label{sec:ch2_summary}
+
+本章围绕后续章节所需的通识理论，回顾了机器人运动学与动力学、约束运动与接触建模、最优控制与微分博弈、稳定性与鲁棒性分析等基础内容。机器人运动学与动力学为第三章和第四章的系统模型建立提供了统一描述；约束运动与接触建模为刚性几何约束操作和柔性接触任务提供了公共建模语言；最优控制与微分博弈为合作博弈控制器设计提供了理论基础；李雅普诺夫稳定性、时变系统分析和扰动误差分析为后续章节中的理论证明提供了基本工具。基于本章内容，第三章将研究刚性约束场景下的人机合作博弈共享控制方法，第四章将进一步研究柔性接触场景下的力--位协同控制方法。

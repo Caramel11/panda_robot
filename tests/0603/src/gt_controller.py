@@ -560,3 +560,45 @@ class CooperativeGameController:
               + K[3] * np.asarray(sigma_f))
 
         return u, K
+
+    def compute_control_axis_alpha(self, e_r1, e_r2, e_f, sigma_f,
+                                   alpha_xyz, Ke):
+        """
+        逐轴 alpha 的笛卡尔控制力。
+
+        原 `compute_control(...)` 使用同一个 alpha 查一组各向同性增益，
+        因而即使 x/y 没有力误差，较低的 z 向力控权重也会同步降低 x/y
+        的位置刚度。对扫描实验而言，力位仲裁只应作用于压入深度 z；
+        x/y 是给定轨迹，应严格位置跟踪。因此本函数允许
+        `alpha_xyz=[1, 1, alpha_z]`，分别查每个轴的 4D 增益。
+
+        Parameters
+        ----------
+        e_r1, e_r2, e_f, sigma_f : (3,)  三轴误差量
+        alpha_xyz : (3,)                 每轴仲裁参数
+        Ke        : float                RLS 估计环境刚度
+
+        Returns
+        -------
+        u_tool : (3,)     笛卡尔控制力
+        K_axes : (3, 4)   每轴激活增益；行顺序为 x/y/z
+        """
+        e_r1 = np.asarray(e_r1, dtype=float)
+        e_r2 = np.asarray(e_r2, dtype=float)
+        e_f = np.asarray(e_f, dtype=float)
+        sigma_f = np.asarray(sigma_f, dtype=float)
+        alpha_xyz = np.asarray(alpha_xyz, dtype=float)
+        if alpha_xyz.shape != (3,):
+            raise ValueError("alpha_xyz must have shape (3,)")
+
+        K_axes = np.vstack([
+            self.get_gain(float(np.clip(a, 0.0, 1.0)), Ke)
+            for a in alpha_xyz
+        ])
+        u = -(
+            K_axes[:, 0] * e_r1
+            + K_axes[:, 1] * e_r2
+            + K_axes[:, 2] * e_f
+            + K_axes[:, 3] * sigma_f
+        )
+        return u, K_axes

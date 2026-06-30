@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+results/**/*.npz
+results/**/*.npy
+results/**/gazebo_status.json
+results/**/config.json

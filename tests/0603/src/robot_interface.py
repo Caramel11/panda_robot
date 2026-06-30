@@ -316,10 +316,18 @@ def compute_torque_with_rcm(ctrl, robot_state, kin_flange,
     e_r1_flange = flange_pos - x_flange_ref
     e_r2_flange = flange_vel - xdot_flange_ref
 
-    # 3. 博弈控制律 (flange-space, 力误差直接累加无杠杆变换)
-    u_flange, K_eff = ctrl.compute_control(
-        e_r1_flange, e_r2_flange, e_f, sigma_f, alpha, K_e_hat
-    )
+    # 3. 博弈控制律 (flange-space, 力误差直接累加无杠杆变换)。
+    # 力位仲裁只作用于 z/压入深度方向；x/y 始终使用 alpha=1 严格位置跟踪。
+    if hasattr(ctrl, "compute_control_axis_alpha"):
+        u_flange, K_axes = ctrl.compute_control_axis_alpha(
+            e_r1_flange, e_r2_flange, e_f, sigma_f,
+            np.array([1.0, 1.0, alpha]), K_e_hat
+        )
+        K_eff = K_axes[2]
+    else:
+        u_flange, K_eff = ctrl.compute_control(
+            e_r1_flange, e_r2_flange, e_f, sigma_f, alpha, K_e_hat
+        )
 
     # 4. 姿态控制 (flange 姿态)
     u_rot, integ_euler_new = compute_u_rotation(
@@ -366,8 +374,15 @@ def compute_torque_no_rcm(ctrl, robot_state, kin_tool,
     """
     tool_pos = robot_state["tool_position"]
 
-    # 1. 平动控制: 由当前 alpha/K_hat 查表得到 K_eff，并计算 tool 端笛卡尔力。
-    u_tool, K_eff = ctrl.compute_control(e_r1, e_r2, e_f, sigma_f, alpha, K_e_hat)
+    # 1. 平动控制: 力位仲裁只作用于 z/压入深度方向；
+    # x/y 始终使用 alpha=1 严格位置跟踪，避免 z 向力控降权同步削弱扫描轨迹。
+    if hasattr(ctrl, "compute_control_axis_alpha"):
+        u_tool, K_axes = ctrl.compute_control_axis_alpha(
+            e_r1, e_r2, e_f, sigma_f, np.array([1.0, 1.0, alpha]), K_e_hat
+        )
+        K_eff = K_axes[2]
+    else:
+        u_tool, K_eff = ctrl.compute_control(e_r1, e_r2, e_f, sigma_f, alpha, K_e_hat)
     if hasattr(ctrl, "no_rcm_u_tool_limits"):
         # 可选的三轴限幅钩子，当前控制器默认没有设置该属性。
         limits = np.asarray(ctrl.no_rcm_u_tool_limits, dtype=float)

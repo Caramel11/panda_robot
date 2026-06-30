@@ -1,0 +1,63 @@
+% !TEX root = ./main_ustc.tex
+
+\ustcsetup{
+  title       = {面向约束操作场景的合作博弈人机协同控制方法研究},
+  title*      = {Research on Cooperative Game Based Human-Robot Collaborative Control for Constrained Manipulation},
+  author      = {刘君洁},
+  discipline  = {控制科学与工程},
+  supervisor  = {秦家虎},
+  date        = {2026-06-08},
+  math-style  = GB,
+  math-font   = xits,
+}
+
+\usepackage{mathtools}
+\usepackage{amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{enumitem}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{url}
+\usepackage[sort]{natbib}
+\bibliographystyle{ustcthesis-numeric}
+
+\graphicspath{{figures/}{figures/ch3_ch4/}{figures/ch5/}{figures/panda_robot/}}
+
+\setcounter{tocdepth}{2}
+\setcounter{secnumdepth}{3}
+\numberwithin{equation}{chapter}
+
+\newtheorem{problem}{问题}[chapter]
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\sat}{\operatorname{clip}}
+\newcommand{\dist}{\operatorname{dist}}
+\newcommand{\vecop}{\operatorname{vec}}
+\newcommand{\argmin}{\operatorname*{arg\,min}}
+\newcommand{\tr}{\operatorname{tr}}
+\newcommand{\T}{\mathrm{T}}
+\newcommand{\e}{\mathrm{e}}
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+
+\usepackage{hyperref}
+\usepackage{cleveref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\crefname{problem}{问题}{问题}
+\crefname{assumption}{假设}{假设}
+\crefname{definition}{定义}{定义}
+\crefname{lemma}{引理}{引理}
+\crefname{theorem}{定理}{定理}
+\crefname{corollary}{推论}{推论}
+\crefname{remark}{注}{注}
+\crefname{equation}{式}{式}
+\crefname{table}{表}{表}
+\crefname{figure}{图}{图}
+
+\emergencystretch=2em
+\sloppy

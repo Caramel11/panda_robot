@@ -1,0 +1,256 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+% ---- Highlighting for revision tracking ----
+\usepackage{soul}
+\sethlcolor{yellow}
+\soulregister{\cite}{7}
+\soulregister{\ref}{7}
+\soulregister{\eqref}{7}
+\soulregister{\label}{7}
+\soulregister{\alpha}{7}
+% --------------------------------------------
+\makeatletter
+\def\fnum@figure{Figure~\thefigure}
+\def\fnum@table{Table~\thetable}
+\makeatother
+\begin{document}
+
+\title{Hierarchical Intent-Aware Shared Control for RCM-Constrained Surgical Robot Manipulation}
+
+\author{\IEEEauthorblockN{Junjie Liu*}
+\IEEEauthorblockA{\textit{Department of Automation, School of Information Science and Intelligence} \\
+\textit{University of Science and Technology of China}\\
+Hefei 230027, China \\
+*Corresponding author: liujunjieustc@mail.ustc.edu.cn}}
+
+\maketitle
+
+\begin{abstract}
+Robot-assisted minimally invasive surgery improves manipulation precision but still requires sustained low-level teleoperation in structured tasks. \hl{This paper presents a hierarchical intent-aware shared-control framework for surgical robotic manipulation under a remote-center-of-motion (RCM) constraint. The framework decomposes the shared-control problem into five tightly coupled modules---intent interpretation, reference adaptation, authority arbitration, cooperative execution, and geometric constraint enforcement---so that each surgical-relevant requirement is addressed by an explicit and replaceable component.} Force-guided minimum-jerk trajectory deformation handles local path correction, while Bayesian goal inference handles sustained target redirection. A dual-channel fuzzy inference system and an adaptive Kalman filter estimate a smooth authority variable from interaction intensity, intervention duration, and spatial context. The human-related and robot-related objectives are synthesized through a cooperative game-theoretic control law and mapped to an RCM-compatible command through shaft-alignment geometry. \hl{Both simulation and physical peg-transfer trials on a Falcon-Franka platform are reported: the simulation experiments isolate the cooperative game-theoretic backbone against a model-predictive-control (MPC) baseline under repeatable conditions, while the physical experiments validate the full system end-to-end. The proposed configuration achieves the lowest mean RCM error and end-effector tracking error among the four tested combinations and reduces trajectory RMS jerk by approximately 69\% relative to the MPC baseline.}
+\end{abstract}
+
+\begin{IEEEkeywords}
+surgical robotics, shared control, remote center of motion, human-robot interaction, game-theoretic control
+\end{IEEEkeywords}
+
+\section{Introduction}
+Robot-assisted minimally invasive surgery (RMIS) has improved dexterity, precision, and ergonomics in laparoscopic procedures \cite{haidegger2022,attanasio2021}. However, surgical robots still require the operator to perform continuous low-level teleoperation in many structured tasks. Even in a peg-transfer scenario, the operator must repeatedly command the tool tip, compensate for the fulcrum effect, avoid obstacles, and maintain the remote-center-of-motion (RCM) constraint. These requirements motivate shared-control methods that preserve human supervision while reducing repetitive manipulation effort.
+
+Existing work has addressed shared control from several perspectives, including confidence-based assistance \cite{saeidi2018}, activity-aware collaboration \cite{su2022}, local physical trajectory deformation \cite{losey2018}, physical interaction as communication \cite{losey2022}, and probabilistic intent recognition \cite{jain2019}. In surgical manipulation, RCM constraint enforcement and bilateral teleoperation have also been studied through passive admittance, virtual fixtures, and constrained controllers \cite{kastritsi2022,su2020}. Game-theoretic models provide a further way to combine human-related and robot-related objectives in physical interaction \cite{li2019,franceschi2024}.
+
+The difficulty is that these functions are often designed separately. A single force-dependent blending rule may respond too strongly to a brief disturbance, whereas a purely autonomous planner may ignore meaningful operator intervention. A surgical shared-control system should distinguish a small local correction from a discrete target redirection, estimate how much authority should be given to the human channel, and execute the resulting command under an RCM constraint. Figure~\ref{fig:framework} shows the resulting hierarchy used in this paper.
+
+\hl{The contributions of this work are threefold. First, a hierarchical intent-aware shared-control architecture is presented that integrates Bayesian goal inference, force-guided trajectory deformation, dual-channel fuzzy authority estimation, cooperative game-theoretic execution, and analytical RCM enforcement within a single coherent pipeline. Second, the dual-channel fuzzy inference system fused with an adaptive Kalman filter (FIS-AKF) is shown to provide a smoother and more semantically-aware authority signal than a direct sigmoid mapping, which is particularly important for hand tremor and brief contact transients in surgical tasks. Third, the framework is validated by simulation studies that isolate the controller backbone and by physical peg-transfer experiments that evaluate the complete system, with quantitative comparisons against three ablated baselines.}
+
+\begin{figure}[t]
+\centerline{\includegraphics[width=0.95\linewidth]{figures/fig_system_framework.pdf}}
+\caption{Overall architecture of the proposed hierarchical shared-control framework.}
+\label{fig:framework}
+\end{figure}
+
+\section{System and RCM Execution}
+The experimental system consists of a Novint Falcon haptic device and a 7-DoF Franka robot equipped with a laparoscopic grasper. The master side provides three-dimensional operator input and haptic interaction information, while the slave side performs peg-transfer manipulation through a simplified trocar. The task geometry and the RCM relationship are summarized in Figure~\ref{fig:schematic}.
+
+Let $p_{tip}^{d}$ denote the desired tool-tip position, $p_{rcm}$ the calibrated trocar point, and $L_{tool}$ the distance between the flange and the tool tip. The tool shaft direction is computed as
+\begin{equation}
+ d_{shaft}=\frac{p_{rcm}-p_{tip}^{d}}{\|p_{rcm}-p_{tip}^{d}\|},
+\end{equation}
+and the desired flange position is reconstructed as
+\begin{equation}
+ p_F^d=p_{tip}^{d}+L_{tool}d_{shaft}.
+\end{equation}
+This mapping makes the line between the desired flange and tool tip pass through the trocar point. The rotational component is constructed by aligning the tool axis with the shaft direction and resolving the remaining rotation using a fixed reference direction.
+
+The shared-control layer operates at the task-space level. It produces a desired command through intent interpretation, reference adaptation, authority arbitration, and cooperative control. The RCM execution layer then converts the command into a feasible robot-side flange motion. This separation allows high-level assistance to be developed without embedding all surgical geometric constraints directly into the intent-inference module.
+
+The geometric formulation is intentionally lightweight. Instead of solving a nonlinear constrained optimization at each sampling instant, the RCM layer reconstructs an executable flange pose analytically from the desired tool-tip position. This makes the high-level controller independent of the robot-specific inverse kinematics implementation and allows the same shared-control logic to be tested with different low-level controllers.
+
+\begin{figure}[t]
+\centerline{\includegraphics[width=0.95\linewidth]{figures/fig_schematic_diagram.pdf}}
+\caption{Master-slave platform and peg-transfer task geometry under the RCM constraint.}
+\label{fig:schematic}
+\end{figure}
+
+\section{Intent-Aware Reference Adaptation}
+\subsection{Force-Guided Local Deformation}
+Operator intervention is treated as a communication signal rather than merely as a disturbance. When the human applies a short corrective motion, a future segment of the nominal robot-side trajectory is locally deformed. Let $\gamma_d$ be a discretized nominal trajectory segment and $V$ be the deformation field. The adapted segment is $\gamma_d+V$.
+
+The deformation is obtained from a minimum-jerk energy with endpoint constraints. For one task-space component,
+\begin{equation}
+J(V)=\frac{1}{2}V^T R V - V^T F_h^b,
+\end{equation}
+where $F_h^b$ is the propagated human interaction force and $R$ is a regularized jerk-energy matrix. Endpoint position and velocity constraints preserve continuity at the insertion point of the local window. This is important in physical execution because a discontinuous reference may be amplified by the slave-side impedance controller. The minimum-jerk basis distributes the correction over a short future horizon so that the path variation is visible but not abrupt.
+
+\subsection{Bayesian Goal Inference}
+Local deformation is not sufficient when the operator intends to redirect the robot to another task-level goal. The controller therefore maintains a belief over a predefined candidate set. The observation is the deviation between the direct teleoperation command and the autonomous reference. A Boltzmann likelihood assigns high probability to a goal whose direction is consistent with the current intervention. A transition prior favors the current goal unless new observations provide sufficient evidence for switching.
+
+A target switch is accepted only if the most likely goal exceeds a confidence threshold and remains dominant for a short temporal window. This hysteresis avoids unintended switching caused by tremor or temporary correction. Once a new target is accepted, the autonomous reference is regenerated and subsequent local deformations refine the path. The probabilistic formulation also provides an interpretable internal state because the belief trajectory can be inspected together with the operator input and reference update.
+
+\section{Authority Arbitration}
+\subsection{Dual-Channel Fuzzy Inference}
+The dynamic authority variable $\alpha(t)$ controls the relative contribution of human-related and robot-related objectives. A direct mapping from force magnitude to authority is simple, but it cannot reliably distinguish persistent correction from transient noise. Therefore, the proposed estimator uses two fuzzy channels. The absolute channel maps interaction-force magnitude, intervention duration, and obstacle clearance to an authority tendency. The incremental channel maps their rate-like quantities to an authority increment.
+
+Figure~\ref{fig:fis} shows the membership functions and representative control surfaces of the two fuzzy evaluators. The absolute evaluator estimates the desired current authority, whereas the incremental evaluator estimates how the authority should evolve. The absolute channel prevents the robot from immediately surrendering authority to a short contact impulse. The incremental channel captures whether the interaction context is increasing or decreasing, which helps the controller change authority gradually.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.235\textwidth]{figures/fis_abs_mf.png}\hfill
+\includegraphics[width=0.235\textwidth]{figures/fis_abs_surface.png}\hfill
+\includegraphics[width=0.235\textwidth]{figures/fis_inc_mf.png}\hfill
+\includegraphics[width=0.235\textwidth]{figures/fis_inc_surface.png}
+\caption{\hl{Membership functions and control surfaces of the dual-channel fuzzy authority evaluators. (Left to right) absolute-channel membership functions; absolute-channel control surface at fixed obstacle distance; incremental-channel membership functions; incremental-channel control surface at fixed clearance rate. Axis labels and legends have been enlarged in the camera-ready figure for legibility.}}
+\label{fig:fis}
+\end{figure}
+
+\subsection{Adaptive Kalman Filtering}
+The outputs of the two fuzzy channels are fused using a compact adaptive Kalman filter. The latent state contains the authority value and its incremental tendency. The absolute fuzzy output and the integrated incremental output form the measurement signal, while recent residual variability is used to adapt the effective measurement uncertainty. The final authority is clipped to $[0,1]$ and smoothed before it enters the cooperative controller.
+
+This filter is important for physical implementation. Without filtering, the authority may switch abruptly when the master signal contains small hand motion or when the obstacle distance changes quickly. The FIS-AKF estimator reduces this sensitivity while still allowing sustained and directionally consistent intervention to change the shared-control role. It performs temporal filtering and semantic filtering simultaneously: short-lived artifacts are suppressed, but persistent interventions are preserved.
+
+\section{Cooperative Game-Theoretic Control}
+The cooperative controller is the central part of the method. Let $z=[x,\dot{x}]^T$ be the task-space state. The human-related objective penalizes deviation from the supervisory reference, and the robot-related objective penalizes deviation from the autonomous reference. The scalarized shared objective is
+\begin{equation}
+ J_c=\alpha J_h+(1-\alpha)J_r.
+\end{equation}
+By completing the square and removing constants independent of the control input, the problem can be written as tracking a weighted consensus reference.
+
+Assuming $\alpha(t)$ is piecewise constant in each control interval, the equivalent task-space input is
+\begin{equation}
+ u^*=-K_c(\alpha)(z-z_c).
+\end{equation}
+The gain $K_c(\alpha)$ is selected according to the filtered authority. This provides a closed-form cooperative backbone and avoids solving a finite-horizon optimization problem at every time step. Compared with a direct blended controller, the cooperative formulation has two advantages. First, the human and robot objectives remain explicitly visible. Second, the consensus reference $z_c$ is recomputed from weighted objective matrices, allowing the controller to move smoothly between operator-dominant and robot-dominant behavior.
+
+\begin{table}[t]
+\caption{Key Implementation Settings.}
+\begin{center}
+\begin{tabular}{ll}
+\hline
+Item & Setting \\
+\hline
+RCM point & $[0.300,0,0.235]$ m \\
+Tool length & 0.525 m \\
+Update rate & 100 Hz for GT-based trials \\
+Authority threshold & 0.70 \\
+FIS-AKF state & $[\alpha,\dot{\alpha}]^T$ \\
+Layouts & 5 layouts $\times$ 5 repetitions \\
+\hline
+\end{tabular}
+\label{tab:param}
+\end{center}
+\end{table}
+
+\section{Experimental Setup}
+\hl{The validation programme consists of two complementary parts. A simulation study isolates the cooperative game-theoretic (GT) backbone against a model-predictive-control (MPC) baseline under repeatable, noise-free conditions, in which both backbones share the same intent-inference module, the same FIS-AKF authority estimator, and the same RCM execution layer. A physical study then evaluates the full system end-to-end on the Franka-Falcon platform. The two studies serve different purposes: the simulation enables a controlled backbone-level comparison that is difficult to obtain on hardware because the MPC implementation requires online finite-horizon optimization at every control step, while the physical study captures realistic hand tremor, contact transients, and trocar interaction that cannot be reproduced numerically.} The physical platform and manipulation process are shown in Figures~\ref{fig:platform} and \ref{fig:process}. The validation task follows a peg-transfer protocol. Each trial includes approach, grasp, lift, transfer, and placement phases. Five nearby start-target layout groups were used, and each condition was repeated five times per layout, resulting in 25 records per physical condition.
+
+The proposed GT + FIS-AKF configuration was compared with three alternatives: GT + Sigmoid, MPC + FIS-AKF, and MPC + Sigmoid. The MPC variants used a rolling finite-horizon optimization backbone. The sigmoid variants replaced the proposed fuzzy adaptive authority estimator with a direct force-dependent mapping. All methods shared the same hardware, RCM execution layer, task layouts, initialization protocol, and evaluation metrics. The main implementation settings are summarized in Table~\ref{tab:param}.
+
+\begin{figure}[t]
+\centering
+\includegraphics[height=4cm]{figures/slave_setup.jpg}\hfill
+\includegraphics[height=4cm]{figures/master_setup.jpg}
+\caption{Experimental platform consisting of the Franka slave robot and the Falcon master device.}
+\label{fig:platform}
+\end{figure}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.19\textwidth]{figures/process0.jpg}\hfill
+\includegraphics[width=0.19\textwidth]{figures/process1.jpg}\hfill
+\includegraphics[width=0.19\textwidth]{figures/process2.jpg}\hfill
+\includegraphics[width=0.19\textwidth]{figures/process3.jpg}\hfill
+\includegraphics[width=0.19\textwidth]{figures/process4.jpg}
+\caption{Sequential snapshots of the peg-transfer task: approach, grasp, lift, transfer, and placement.}
+\label{fig:process}
+\end{figure*}
+
+The selected metrics reflect both surgical-constraint performance and interaction quality. Mean RCM error measures compatibility with the insertion constraint. Mean end-effector error evaluates task-space tracking. Interaction force and force smoothness characterize operator effort and handover stability. Trajectory RMS jerk measures motion smoothness, and mean obstacle distance characterizes conservative spatial behavior around the restricted region.
+
+\section{Results and Discussion}
+\subsection{Simulation Comparison of Controller Backbones}
+\hl{This subsection isolates the cooperative game-theoretic (GT) backbone against the MPC backbone in simulation. The simulation study is presented prior to the physical study because it removes hardware-related confounders and enables a controlled comparison of the two controllers under identical reference signals, identical authority profiles, and noise-free measurements. The hardware results that close the loop on the full system are reported in Sections~\ref{ss:targetswitch} and~\ref{ss:fourmethod}.}
+Figure~\ref{fig:simstats} summarizes the simulation comparison between the proposed GT controller and the MPC baseline. Under the same task layout and arbitration pipeline, the GT controller reduced mean RCM error from 0.727 mm to 0.362 mm. It also reduced mean end-effector tracking error from 0.001014 m to 0.000602 m and trajectory RMS jerk from 0.000437 to 0.000131. \hl{The reduction in RMS jerk (approximately 70\%) indicates that the closed-form cooperative law produces smoother constrained motion than the rolling-horizon MPC implementation, which is consistent with the analytical structure of the GT law that avoids per-step receding-horizon re-optimization.}
+
+\begin{figure}[t]
+\centerline{\includegraphics[width=0.95\linewidth]{figures/significance_annotated_GTvsMPC.png}}
+\caption{Simulation comparison between the GT impedance controller and the MPC baseline.}
+\label{fig:simstats}
+\end{figure}
+
+\subsection{Local Correction and Target Switching}
+\label{ss:targetswitch}
+Figure~\ref{fig:switching} shows qualitative behavior under two operator-intent modes \hl{collected on the physical Franka-Falcon platform}. In the no-target-change case, the operator correction modifies the current reference locally. In the target-change case, sustained intervention causes the Bayesian belief to switch the task-level target. Figure~\ref{fig:targetstats} reports the corresponding statistics. Target switching did not produce a statistically significant increase in mean RCM error or mean interaction force, although tracking error and jerk increased because the switching condition introduced a longer transient path.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[height=3.5cm]{figures/experiment_3d_trajectories_final_Othertarget_false.png}\hfill
+\includegraphics[height=3.5cm]{figures/experiment_parameter_sync_analysis_OtherTarget_false.png}\hfill
+\includegraphics[height=3.5cm]{figures/trajectory_xyz_with_mae_OtherTarget_false.png}\\
+\includegraphics[height=3.5cm]{figures/experiment_3d_trajectories_final_true.png}\hfill
+\includegraphics[height=3.5cm]{figures/experiment_parameter_sync_analysis_true.png}\hfill
+\includegraphics[height=3.5cm]{figures/trajectory_xyz_with_mae_true.png}\hfill
+\caption{\hl{Representative behavior for local path correction (top row) and target switching (bottom row) on the physical platform. Each row shows the 3D end-effector trajectories with intent-event markers, the synchronized force-arbitration-error-torque time series, and the per-axis tracking comparison. All annotations have been enlarged in the camera-ready version for legibility under column-width printing.}}
+\label{fig:switching}
+\end{figure*}
+
+\begin{figure}[t]
+\centerline{\includegraphics[width=0.95\linewidth]{figures/significance_annotated_OtherTarget.png}}
+\caption{Quantitative comparison between local-correction and target-switching trials.}
+\label{fig:targetstats}
+\end{figure}
+
+\subsection{Four-Method Physical Comparison}
+\label{ss:fourmethod}
+Figure~\ref{fig:fourmethod} and Table~\ref{tab:results} compare the proposed method with the three baselines \hl{on the physical platform across 25 trials per condition}. GT + FIS-AKF achieved the lowest RCM error and end-effector error among the four configurations. Compared with MPC + FIS-AKF, it reduced mean RCM error from 0.00451 m to 0.00303 m and mean end-effector error from 0.00743 m to 0.00524 m. It also reduced RMS jerk from 0.00129 to 0.00040. Compared with GT + Sigmoid, the FIS-AKF estimator reduced mean interaction force from 0.2583 N to 0.1944 N.
+
+\begin{table}[t]
+\caption{Physical Comparison Across 25 Trials Per Condition.}
+\begin{center}
+\begin{tabular}{lcccc}
+\hline
+Metric & GT+FIS & GT+Sig. & MPC+FIS & MPC+Sig. \\
+\hline
+RCM error & 0.00303 & 0.00306 & 0.00451 & 0.00488 \\
+EE error & 0.00524 & 0.00525 & 0.00743 & 0.00766 \\
+Interaction & 0.1944 & 0.2583 & 0.1345 & 0.1325 \\
+Force smooth. & 0.00279 & 0.00360 & 0.00275 & 0.00297 \\
+RMS jerk & 0.00040 & 0.00051 & 0.00129 & 0.00144 \\
+\hline
+\end{tabular}
+\label{tab:results}
+\end{center}
+\end{table}
+
+\begin{figure}[t]
+\centerline{\includegraphics[width=0.90\linewidth]{figures/significance_annotated_4method.png}}
+\caption{Comparative physical validation of GT/MPC control backbones and FIS-AKF/sigmoid arbitration.}
+\label{fig:fourmethod}
+\end{figure}
+
+The comparison shows that lower interaction force alone is not sufficient to characterize surgical shared-control performance. MPC-based methods produced lower interaction force in some trials, but this was accompanied by larger RCM and end-effector errors. For RCM-constrained manipulation, maintaining insertion compatibility and tracking accuracy is essential, so a moderate increase in interaction effort may be acceptable when it leads to smoother and more accurate robot-side execution.
+
+This study remains a platform-level validation. It uses a fixed trocar point, predefined candidate goals, and repeated trials by the developer-author. The results therefore support the engineering feasibility of the framework rather than clinical effectiveness. Future work will include multi-operator experiments, richer perception for target inference, moving or compliant trocar models, and passivity-aware haptic rendering.
+
+\section{Conclusion}
+\hl{This paper has presented a hierarchical intent-aware shared-control framework for RCM-constrained surgical robotic manipulation. The framework integrates five tightly coupled modules: Bayesian goal inference for sustained target redirection, force-guided minimum-jerk deformation for local path correction, a dual-channel FIS-AKF authority estimator for smooth and semantically-aware arbitration, a closed-form cooperative game-theoretic controller for operator--robot co-execution, and an analytical RCM execution layer that decouples the high-level shared-control logic from the robot-specific inverse kinematics. Simulation experiments isolate the cooperative game-theoretic backbone and show that it reduces mean RCM error from 0.727 mm to 0.362 mm, mean end-effector tracking error by approximately 41\%, and trajectory RMS jerk by approximately 70\% relative to the MPC baseline. Physical peg-transfer experiments on the Falcon-Franka platform further confirm that the proposed configuration achieves the lowest RCM and end-effector errors among the four tested combinations and reduces mean interaction force by approximately 25\% relative to a sigmoid-based arbitrator. Consistent with these quantitative gains, the proposed framework also preserves meaningful operator intervention while suppressing tremor and brief contact transients, which is a key requirement in laparoscopic training scenarios. Limitations of the present study include the use of a fixed trocar point, predefined candidate goals, and a single-operator evaluation. Future work will address multi-operator validation with mixed-experience cohorts, richer perception-driven goal sets, compliant or moving trocar models, and passivity-aware haptic rendering, with the longer-term goal of moving toward more clinically representative surgical training scenarios.}
+
+\begin{thebibliography}{00}
+\bibitem{haidegger2022} T. Haidegger, S. Speidel, D. Stoyanov, and R. M. Satava, ``Robot-assisted minimally invasive surgery: surgical robotics in the data age,'' \emph{Proceedings of the IEEE}, 2022, doi: 10.1109/JPROC.2022.3145032.
+\bibitem{attanasio2021} A. Attanasio, B. Scaglioni, E. De Momi, P. Fiorini, and P. Valdastri, ``Autonomy in surgical robotics,'' \emph{Annual Review of Control, Robotics, and Autonomous Systems}, 2021, doi: 10.1146/annurev-control-062420-090543.
+\bibitem{saeidi2018} H. Saeidi et al., ``A confidence-based shared control strategy for the Smart Tissue Autonomous Robot,'' in \emph{Proc. IEEE/RSJ IROS}, 2018, doi: 10.1109/IROS.2018.8593524.
+\bibitem{su2022} H. Su et al., ``A human activity-aware shared control solution for medical human-robot interaction,'' \emph{Assembly Automation}, 2022, doi: 10.1108/AA-09-2021-0127.
+\bibitem{losey2018} D. P. Losey and M. K. O'Malley, ``Trajectory deformations from physical human-robot interaction,'' \emph{IEEE Transactions on Robotics}, 2018, doi: 10.1109/TRO.2018.2830374.
+\bibitem{losey2022} D. P. Losey, A. Bajcsy, M. K. O'Malley, and A. D. Dragan, ``Physical interaction as communication,'' \emph{The International Journal of Robotics Research}, 2022, doi: 10.1177/02783649221110257.
+\bibitem{jain2019} S. Jain and B. Argall, ``Probabilistic human intent recognition for shared autonomy in assistive robotics,'' \emph{ACM Transactions on Human-Robot Interaction}, 2019, doi: 10.1145/3359614.
+\bibitem{kastritsi2022} T. Kastritsi and Z. Doulgeri, ``A passive admittance controller to enforce RCM and tool spatial constraints,'' \emph{Robotics and Autonomous Systems}, 2022, doi: 10.1016/j.robot.2022.104075.
+\bibitem{su2020} H. Su et al., ``Bilateral teleoperation control of a redundant manipulator with an RCM kinematic constraint,'' in \emph{Proc. IEEE ICRA}, 2020, doi: 10.1109/ICRA40945.2020.9196653.
+\bibitem{li2019} Y. Li et al., ``Differential game theory for versatile physical human-robot interaction,'' \emph{Nature Machine Intelligence}, 2019, doi: 10.1038/s42256-019-0037-5.
+\bibitem{franceschi2024} P. Franceschi, N. Pedrocchi, and M. Beschi, ``Human-robot role arbitration via differential game theory,'' \emph{IEEE Transactions on Automation Science and Engineering}, 2024, doi: 10.1109/TASE.2023.3320708.
+\bibitem{han2025} L. Han, J. Zhang, and H. Wang, ``Shared control in pHRI: integrating local trajectory replanning and cooperative game theory,'' \emph{IEEE Transactions on Robotics}, 2025, doi: 10.1109/TRO.2025.3532510.
+\end{thebibliography}
+
+\end{document}

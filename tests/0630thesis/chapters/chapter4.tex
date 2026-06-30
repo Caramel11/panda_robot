@@ -1,0 +1,1121 @@
+% !TeX root = ../main_ustc.tex
+\chapter{面向柔性接触任务的折扣帕累托力--位协同控制方法}
+\label{chap:flexible_pareto_contact}
+
+第三章在第二章预备知识的基础上，研究了刚性几何约束操作中的人机意图仲裁问题。该类任务的核心在于判断操作者监督意图，并在机器人自主目标与人侧监督目标之间分配控制权。然而，当机器人末端与柔性环境持续接触时，控制问题发生了本质变化。即使操作者意图保持不变，柔性环境刚度、阻尼、接触深度和扫描方向的变化也会导致位置误差与接触力误差相互耦合。此时，控制器不仅要跟踪期望轨迹，还要保证接触力位于安全范围内，并避免由远心运动几何约束引起的姿态变化放大接触风险。
+
+本章面向柔性接触恒力扫描任务，提出一种交互力安全裕度驱动的折扣帕累托力--位协同控制方法。为避免控制器仅停留在工程实现层面，本章首先从机械臂关节空间动力学出发，推导任务空间动力学模型，并在此基础上建立含残差项的力--位增广系统。与第三章的人机仲裁参数 $\alpha_{\mathrm{HR}}$ 不同，本章使用 $\alpha_{\mathrm{FP}}$ 表示力--位优先级。其值越大，控制器越偏向位置跟踪；其值越小，控制器越偏向接触力调节。为了提高理论表达的完整性，本章首先建立含残差项的力--位增广非线性系统，然后在折扣型多目标代价函数下求解帕累托反馈控制律，并进一步分析残差扰动、刚度失配和动态优先级变化对性能与稳定性的影响。本章沿用第二章中的接触建模和鲁棒性分析记号，使用 $\xi$ 表示力--位增广状态，使用 $\alpha_{\mathrm{FP}}$ 表示位置目标与力目标之间的优先级。
+
+\section{问题描述与系统建模}
+\label{sec:ch4_problem}
+
+本节先给出柔性接触扫描任务的目标，再由机械臂动力学过渡到局部力--位增广模型，并补充环境参数估计方法，为后续控制器求解提供统一状态与参数基础。
+
+本节先从柔性接触任务场景和控制目标说起。
+\label{subsec:ch4_task}
+
+考虑从端机器人携带细长工具通过固定几何约束点与柔性环境接触，并沿给定路径完成扫描。设 $x(t)\in\R^n$ 为工具接触点位置，$x_d(t)\in\R^n$ 为期望扫描轨迹，$f_e(t)\in\R^n$ 为环境作用于工具的接触力，$f_d(t)\in\R^n$ 为期望接触力。柔性环境可表示为组织表面、软质工件、弹性检测对象或可变刚度仿真接触面。扫描过程中，工具需要保持适当压入。接触力过大可能造成环境损伤或机器人冲击，接触力过小则可能导致脱离接触，使扫描失效。
+
+设受控的标量接触力为
+\begin{equation}
+  y_f(t)=S_f f_e(t),
+  \label{eq:ch4_yf}
+\end{equation}
+其中 $S_f\in\R^{1\times n}$ 为力方向选择矩阵。给定安全力范围 $[F_{\min},F_{\max}]$ 和期望力 $F_d$，满足
+\begin{equation}
+  F_{\min}<F_d<F_{\max} .
+  \label{eq:ch4_force_band}
+\end{equation}
+本章希望控制 $y_f(t)$ 尽可能接近 $F_d$，同时避免越过安全上下界。与第三章不同，这里的关键权衡不再是“人侧目标与机器人侧目标”，而是“位置目标与力安全目标”。
+
+\begin{problem}[柔性接触下的位置--力协同控制问题]
+\label{prob:ch4_force_position}
+考虑机器人末端工具在几何约束下与柔性环境保持接触并沿期望轨迹扫描的任务。设计反馈控制律 $u(t)$ 与力--位优先级参数 $\alpha_{\mathrm{FP}}(t)$，使系统在存在接触模型误差和残差扰动时同时满足以下目标：
+\begin{enumerate}[label=(\arabic*)]
+  \item 位置误差 $e_p(t)=x(t)-x_d(t)$ 保持有界并尽可能减小；
+  \item 力误差 $e_f(t)=f_e(t)-f_d(t)$ 保持有界并尽可能减小；
+  \item 受控接触力 $y_f(t)$ 尽可能位于 $[F_{\min},F_{\max}]$ 内；
+  \item 几何约束误差 $e_{\mathrm{gc}}(t)$ 保持在允许范围内；
+  \item 在线控制计算满足实时执行要求。
+\end{enumerate}
+\end{problem}
+
+\begin{remark}
+本章中的 $\alpha_{\mathrm{FP}}$ 与第三章中的 $\alpha_{\mathrm{HR}}$ 具有不同含义。$\alpha_{\mathrm{HR}}$ 表示人机目标权重，$\alpha_{\mathrm{FP}}$ 表示位置目标与力目标之间的优先级。两者不应在同一公式中混用。
+\end{remark}
+
+
+在控制目标明确后，下面建立任务空间动力学模型。
+\label{subsec:ch4_robot_dynamics}
+
+柔性接触控制的设计对象是从端机械臂在任务空间内的接触点运动。参考安全人机协作最优运动规划中的建模方式，先从机械臂关节空间动力学出发，再将其转换到任务空间\cite{li2025optimal}。设机械臂具有 $n_q$ 个关节，其动力学为
+\begin{equation}
+  M_q(q)\ddot q+C_q(q,\dot q)\dot q+G_q(q)=\tau,
+  \label{eq:ch4_joint_dynamics}
+\end{equation}
+其中 $q,\dot q,\ddot q\in\R^{n_q}$ 分别为关节位置、速度和加速度，$M_q(q)$ 为惯性矩阵，$C_q(q,\dot q)$ 为科氏力与离心力矩阵，$G_q(q)$ 为重力项，$\tau$ 为关节力矩输入。
+
+设工具接触点或等效控制点位置为 $p\in\R^n$，正运动学为
+\begin{equation}
+  p=\Phi(q),
+  \label{eq:ch4_forward_kinematics}
+\end{equation}
+其速度关系为
+\begin{equation}
+  \dot p=J(q)\dot q .
+  \label{eq:ch4_task_velocity}
+\end{equation}
+在 $J(q)$ 行满秩的工作区间内，有
+\begin{equation}
+  \dot q=J^+(q)\dot p,
+  \quad
+  \ddot q=\dot J^+(q)\dot p+J^+(q)\ddot p .
+  \label{eq:ch4_qdot_qddot}
+\end{equation}
+将\eqref{eq:ch4_qdot_qddot}代入\eqref{eq:ch4_joint_dynamics}并左乘 $J^{+\T}(q)$，得到任务空间动力学
+\begin{equation}
+  M_p(q)\ddot p+C_p(q,\dot q)\dot p+G_p(q)=\mu,
+  \label{eq:ch4_task_dynamics}
+\end{equation}
+其中
+\begin{align}
+  M_p(q)&=J^{+\T}(q)M_q(q)J^+(q),
+  \label{eq:ch4_Mp}\\
+  C_p(q,\dot q)&=J^{+\T}(q)\bigl(M_q(q)\dot J^+(q)+C_q(q,\dot q)J^+(q)\bigr),
+  \label{eq:ch4_Cp}\\
+  G_p(q)&=J^{+\T}(q)G_q(q),
+  \label{eq:ch4_Gp}\\
+  \mu&=J^{+\T}(q)\tau.
+  \label{eq:ch4_mu}
+\end{align}
+若局部常秩条件成立，上式可进一步转换为含 $\dot J(q)$ 的常见表达。本文采用\eqref{eq:ch4_Cp}是为了避免在一般伪逆情形下省略 $\dot J^+(q)$ 所引入的附加项。
+
+定义机器人任务空间状态
+\begin{equation}
+  \zeta(t)=\begin{bmatrix}p^{\T}(t)&\dot p^{\T}(t)\end{bmatrix}^{\T} .
+  \label{eq:ch4_zeta_state}
+\end{equation}
+由\eqref{eq:ch4_task_dynamics}可得任务空间非线性状态模型
+\begin{equation}
+  \dot\zeta=F_m(\zeta)\zeta+B_m(\zeta)u_m,
+  \label{eq:ch4_nonlinear_task_model}
+\end{equation}
+其中
+\begin{equation}
+  F_m(\zeta)=
+  \begin{bmatrix}
+    0&I\\
+    0&-M_p^{-1}(q)C_p(q,\dot q)
+  \end{bmatrix},
+  \quad
+  B_m(\zeta)=
+  \begin{bmatrix}
+    0\\
+    M_p^{-1}(q)
+  \end{bmatrix},
+  \quad
+  u_m=\mu-G_p(q).
+  \label{eq:ch4_Fm_Bm}
+\end{equation}
+该模型体现了机械臂惯性、速度相关项和重力项对任务空间接触运动的影响。柔性接触控制器并不直接对\eqref{eq:ch4_nonlinear_task_model}求解完整非线性哈密顿--雅可比--贝尔曼方程，而是利用内环补偿和局部线性化得到可实时求解的增广误差模型。由任务空间非线性模型到局部增广模型之间的未建模项，将在后续统一并入残差 $d(\xi,t)$。
+
+\subsection{力--位增广系统与环境估计}
+\label{subsec:ch4_augmented_system}
+
+在任务空间动力学\eqref{eq:ch4_task_dynamics}及其状态模型\eqref{eq:ch4_nonlinear_task_model}基础上，柔性接触任务采用修正阻抗动力学作为控制器设计的局部等效模型。阻抗控制为机器人与环境交互提供了可解释的柔顺动力学结构\cite{hogan1985impedance}：
+\begin{equation}
+  M\ddot x+C\dot x+K_v(x-x_d)=\mu+f_e,
+  \label{eq:ch4_impedance}
+\end{equation}
+其中 $M\succ0$ 为期望惯性矩阵，$C\succ0$ 为期望阻尼矩阵，$K_v\succ0$ 为基线虚拟刚度矩阵，$\mu$ 为机器人任务空间输入。基线虚拟刚度提供名义位置恢复作用，并改善后续增广误差系统的正则性。
+
+柔性环境在局部接触区间内采用开尔文--沃伊特模型近似：
+\begin{equation}
+  f_e=-K_e(x-x_s)-B_e(\dot x-\dot x_s)+\Delta_f(x,\dot x,t),
+  \label{eq:ch4_kv}
+\end{equation}
+其中 $x_s(t)$ 为局部接触面参考位置，$K_e\succeq0$ 和 $B_e\succeq0$ 分别为局部等效刚度与阻尼，$\Delta_f$ 表示接触模型误差。对于分段变刚度环境，$K_e$ 与 $B_e$ 可在不同扫描区域取不同常值；对于真实柔性环境，它们只是局部近似参数，并不要求精确已知。
+
+\begin{assumption}[柔性接触模型局部有效性]
+\label{ass:ch4_contact_model}
+在每一个短时间接触区间内，柔性环境可由\eqref{eq:ch4_kv}近似描述。矩阵 $K_e$、$B_e$ 以及接触面参考 $x_s(t)$、$\dot x_s(t)$ 在所考虑的紧集内有界。模型误差 $\Delta_f(x,\dot x,t)$ 及其对时间的局部导数有界。
+\end{assumption}
+
+由于柔性环境参数通常无法事先精确获得，还需要在线估计局部接触参数。
+\label{subsec:ch4_env_estimator}
+
+上述控制器设计依赖局部环境参数。对于真实柔性环境，$K_e$ 和 $B_e$ 通常无法事先精确获得，并且可能随扫描位置、压入深度和材料非均匀性变化。因此，本章采用面向控制增益调度的在线环境估计方法，实时给出局部表观刚度估计 $\hat K_e$ 和阻尼估计 $\hat B_e$。该估计量不用于替代完整接触模型，而是作为离线增益表中的调度变量，使控制器能够根据环境软硬变化调整反馈增益。
+
+沿受控接触方向定义单向压入量
+\begin{equation}
+  \delta(t)=\max\{0,x_s(t)-x_n(t)\},
+  \label{eq:ch4_delta_contact}
+\end{equation}
+其中 $x_n(t)$ 为工具尖端在接触法向上的坐标。未接触时 $\delta=0$；发生压入时 $\delta>0$。在局部短时间区间内，受控力可近似写为标量开尔文--沃伊特形式
+\begin{equation}
+  y_f(t)=K_e\delta(t)+B_e\dot\delta(t)+\nu_f(t),
+  \label{eq:ch4_scalar_kv}
+\end{equation}
+其中 $\nu_f(t)$ 表示测量噪声和模型误差。若直接对 $K_e$ 和 $B_e$ 同时做无约束最小二乘估计，速度项 $\dot\delta$ 的噪声容易被误解释为刚度突变，尤其是在恒力扫描中压入量通常只有毫米量级。为提高估计对控制的可用性，本章将刚度估计和阻尼估计分开处理：$\hat K_e$ 采用准静态表观刚度的低通估计，$\hat B_e$ 采用有界递推最小二乘作为辅助估计。
+
+当接触力和压入量足够大时，定义表观刚度观测值
+\begin{equation}
+  K_{\mathrm{obs}}(t)=
+  \sat\left(\frac{|y_f(t)|}{|\delta(t)|},K_{\min},K_{\max}\right),
+  \quad |y_f|\ge F_{\mathrm{th}},\ |\delta|\ge\delta_{\min}.
+  \label{eq:ch4_K_obs}
+\end{equation}
+若不满足接触判据，则保持上一时刻估计值不变，避免未接触或微小压入时的信息不足污染估计。刚度估计通过指数低通更新：
+\begin{equation}
+  \hat K_{e,k}=
+  \sat\left(\hat K_{e,k-1}+\alpha_K\left(K_{\mathrm{obs},k}-\hat K_{e,k-1}\right),
+  K_{\min},K_{\max}\right),
+  \quad 0<\alpha_K<1 .
+  \label{eq:ch4_K_ema}
+\end{equation}
+该式使 $\hat K_e$ 能够跟随分段刚度变化，同时抑制接触力瞬态和速度估计噪声造成的尖峰。
+
+阻尼估计采用带遗忘因子的有界递推最小二乘。令
+\begin{equation}
+  \phi_k=\begin{bmatrix}\delta_k&\bar{\dot\delta}_k\end{bmatrix}^{\T},
+  \quad
+  \theta_k=\begin{bmatrix}K_{e,k}&B_{e,k}\end{bmatrix}^{\T},
+  \label{eq:ch4_rls_phi_theta}
+\end{equation}
+其中 $\bar{\dot\delta}_k$ 为限幅后的压入速度。递推增益、参数和协方差更新为
+\begin{align}
+  L_k&=\frac{P_{k-1}\phi_k}{\lambda_R+\phi_k^{\T}P_{k-1}\phi_k},
+  \label{eq:ch4_rls_gain}\\
+  \theta_k&=\theta_{k-1}+L_k\left(y_{f,k}-\phi_k^{\T}\theta_{k-1}\right),
+  \label{eq:ch4_rls_theta}\\
+  P_k&=\frac{1}{\lambda_R}\left(P_{k-1}-L_k\phi_k^{\T}P_{k-1}\right),
+  \label{eq:ch4_rls_P}
+\end{align}
+其中 $\lambda_R\in(0,1]$ 为遗忘因子。更新后对 $K_{e,k}$ 和 $B_{e,k}$ 施加物理上下界约束。实际反馈增益调度使用\eqref{eq:ch4_K_ema}中的 $\hat K_e$，而 $\hat B_e$ 主要作为接触模型诊断和阻尼辅助信息。这样既保留了开尔文--沃伊特模型的可解释性，又避免速度噪声主导刚度调度。
+
+定义位置误差、速度误差和力误差为
+\begin{equation}
+  e_p=x-x_d,
+  \quad e_v=\dot x-\dot x_d,
+  \quad e_f=f_e-f_d .
+  \label{eq:ch4_errors}
+\end{equation}
+为改善稳态力调节并避免积分饱和，引入力误差泄漏积分状态
+\begin{equation}
+  \dot\sigma_f=e_f-\lambda_f\sigma_f,
+  \quad \lambda_f>0 .
+  \label{eq:ch4_sigma}
+\end{equation}
+增广误差状态为
+\begin{equation}
+  \xi=\begin{bmatrix}e_p^{\T}&e_v^{\T}&e_f^{\T}&\sigma_f^{\T}\end{bmatrix}^{\T}\in\R^{4n} .
+  \label{eq:ch4_xi}
+\end{equation}
+
+\begin{assumption}[残差项有界性]
+\label{ass:ch4_residual}
+将任务空间动力学线性化误差、内环补偿误差、参考轨迹变化、接触面运动、接触模型误差、几何映射误差、摩擦、离散化误差和测量噪声统一记为残差项 $d(\xi,t)$。存在非负常数 $\bar d_0$ 与 $\bar d_1$，使得
+\begin{equation}
+  \norm{d(\xi,t)}\le \bar d_0+\bar d_1\norm{\xi},\quad \forall t\ge0 .
+  \label{eq:ch4_residual_bound_affine}
+\end{equation}
+若只在给定紧集 $\Omega_\xi$ 内分析局部性能，则可取常数 $\bar d>0$，使得
+\begin{equation}
+  \norm{d(\xi,t)}\le \bar d,
+  \quad \xi\in\Omega_\xi .
+  \label{eq:ch4_residual_bound_const}
+\end{equation}
+\end{assumption}
+
+\begin{lemma}[含残差项的增广位置--力误差系统]
+\label{lem:ch4_augmented_system}
+在\cref{ass:ch4_contact_model}下，修正阻抗系统\eqref{eq:ch4_impedance}与局部开尔文--沃伊特模型\eqref{eq:ch4_kv}可写成增广误差系统
+\begin{equation}
+  \dot\xi=A_c\xi+B_c\mu+d(\xi,t),
+  \label{eq:ch4_aug_system_mu}
+\end{equation}
+其中 $A_c$ 和 $B_c$ 由 $M,C,K_v,K_e,B_e,\lambda_f$ 的局部标称值确定。若采用前馈补偿 $\mu=u_{\mathrm{ff}}+u$，并将未补偿项并入残差，则控制器设计所使用的标称反馈模型为
+\begin{equation}
+  \dot\xi=A_c\xi+B_cu .
+  \label{eq:ch4_nominal_model}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+由 $e_p=x-x_d$ 可得
+\begin{equation}
+  \dot e_p=\dot x-
+  \dot x_d=e_v .
+  \label{eq:ch4_ep_dot}
+\end{equation}
+由 $e_v=\dot x-\dot x_d$ 可得
+\begin{equation}
+  \dot e_v=\ddot x-\ddot x_d .
+  \label{eq:ch4_ev_dot_def}
+\end{equation}
+根据修正阻抗动力学\eqref{eq:ch4_impedance}，有
+\begin{equation}
+  M\ddot x=-C\dot x-K_v(x-x_d)+\mu+f_e .
+\end{equation}
+两边左乘 $M^{-1}$，并代入 $\dot x=e_v+\dot x_d$、$x-x_d=e_p$、$f_e=e_f+f_d$，得到
+\begin{equation}
+  \dot e_v=-M^{-1}K_ve_p-M^{-1}Ce_v+M^{-1}e_f+M^{-1}\mu+\Delta_v(t),
+  \label{eq:ch4_ev_dot}
+\end{equation}
+其中
+\begin{equation}
+  \Delta_v(t)=-M^{-1}C\dot x_d+M^{-1}f_d-\ddot x_d
+  \label{eq:ch4_delta_v}
+\end{equation}
+为参考轨迹和期望力引起的仿射项。若该项可测或可计算，可由 $u_{\mathrm{ff}}$ 部分补偿；未补偿部分进入残差项。
+
+接下来考虑力误差动态。由 $e_f=f_e-f_d$ 得
+\begin{equation}
+  \dot e_f=\dot f_e-\dot f_d .
+  \label{eq:ch4_ef_dot_def}
+\end{equation}
+对\eqref{eq:ch4_kv}求导，在局部短时间区间内将 $K_e$ 和 $B_e$ 的变化归入残差，得到
+\begin{equation}
+  \dot f_e=-K_e(\dot x-\dot x_s)-B_e(\ddot x-\ddot x_s)+\Delta_{\dot f}(x,\dot x,t),
+  \label{eq:ch4_fe_dot}
+\end{equation}
+其中 $\Delta_{\dot f}$ 包含接触参数变化和模型误差导数项。将 $\dot x=e_v+\dot x_d$ 以及由\eqref{eq:ch4_impedance}得到的 $\ddot x$ 代入\eqref{eq:ch4_fe_dot}，并整理关于 $e_p,e_v,e_f,\mu$ 的项，可得
+\begin{equation}
+  \dot e_f=B_eM^{-1}K_ve_p+(-K_e+B_eM^{-1}C)e_v-B_eM^{-1}e_f-B_eM^{-1}\mu+\Delta_f^{\mathrm{res}}(\xi,t),
+  \label{eq:ch4_ef_dot}
+\end{equation}
+其中 $\Delta_f^{\mathrm{res}}$ 汇集 $\dot x_d,\ddot x_d,\dot f_d,x_s,\dot x_s,\ddot x_s$ 以及模型失配项。由\eqref{eq:ch4_sigma}有
+\begin{equation}
+  \dot\sigma_f=e_f-\lambda_f\sigma_f .
+  \label{eq:ch4_sigma_dot_final}
+\end{equation}
+将\eqref{eq:ch4_ep_dot}、\eqref{eq:ch4_ev_dot}、\eqref{eq:ch4_ef_dot}与\eqref{eq:ch4_sigma_dot_final}依次堆叠，即可得到\eqref{eq:ch4_aug_system_mu}。若使用 $\mu=u_{\mathrm{ff}}+u$ 对可计算仿射项进行补偿，剩余反馈设计模型为\eqref{eq:ch4_nominal_model}，未补偿项并入 $d(\xi,t)$。引理得证。
+\end{proof}
+
+对于逐轴实现，可取单轴状态 $\xi_i=[e_{p,i},e_{v,i},e_{f,i},\sigma_{f,i}]^{\T}$，并写成
+\begin{equation}
+  \dot\xi_i=\bar A_i\xi_i+\bar b_i u_i+d_i(t),
+  \label{eq:ch4_axis_state}
+\end{equation}
+其中
+\begin{equation}
+  \bar A_i=\begin{bmatrix}
+  0&1&0&0\\
+  -K_v/M&-C/M&1/M&0\\
+  B_eK_v/M&-K_e+B_eC/M&-B_e/M&0\\
+  0&0&1&-\lambda_f
+  \end{bmatrix},
+  \quad
+  \bar b_i=\begin{bmatrix}0\\1/M\\-B_e/M\\0\end{bmatrix} .
+  \label{eq:ch4_axis_matrices}
+\end{equation}
+该模型是后续离线增益表和在线反馈计算的实现基础。三维任务空间可由逐轴模型按块对角方式扩展。
+
+\subsection{折扣多目标控制问题}
+\label{subsec:ch4_discount_problem}
+
+\begin{definition}[折扣型位置目标与力目标代价函数]
+\label{def:ch4_discount_costs}
+对位置跟踪目标和力调节目标，分别定义折扣型无限时域代价函数
+\begin{equation}
+  J_p(\xi_0,u)=\int_0^\infty \e^{-\gamma t}\left[\xi^{\T}Q_p\xi+u^{\T}R_pu\right]\dd t,
+  \label{eq:ch4_Jp}
+\end{equation}
+\begin{equation}
+  J_f(\xi_0,u)=\int_0^\infty \e^{-\gamma t}\left[\xi^{\T}Q_f\xi+u^{\T}R_fu\right]\dd t,
+  \label{eq:ch4_Jf}
+\end{equation}
+其中 $\gamma>0$ 为折扣因子，$Q_p\succeq0$ 主要惩罚 $e_p$ 和 $e_v$，$Q_f\succeq0$ 主要惩罚 $e_f$ 和 $\sigma_f$，$R_p,R_f\succ0$ 为控制输入权重。
+\end{definition}
+
+折扣因子使近期误差和近期力风险具有更高权重，也使无限时域代价在存在扰动和局部模型近似时具有更好的数学性质。类似的折扣帕累托思路已被用于连续接触任务中的位置--力协调控制\cite{li2026pareto}。给定力--位优先级 $\alpha_{\mathrm{FP}}\in[\alpha_{\min},\alpha_{\max}]$，定义
+\begin{equation}
+  Q_\alpha=\alpha_{\mathrm{FP}}Q_p+\bigl(1-\alpha_{\mathrm{FP}}\bigr)Q_f,
+  \label{eq:ch4_Qalpha}
+\end{equation}
+\begin{equation}
+  R_\alpha=\alpha_{\mathrm{FP}}R_p+\bigl(1-\alpha_{\mathrm{FP}}\bigr)R_f .
+  \label{eq:ch4_Ralpha}
+\end{equation}
+对应的标量化折扣代价为
+\begin{equation}
+  J_\alpha(\xi_0,u)=\int_0^\infty \e^{-\gamma t}\left[\xi^{\T}Q_\alpha\xi+u^{\T}R_\alpha u\right]\dd t .
+  \label{eq:ch4_Jalpha}
+\end{equation}
+
+\begin{definition}[帕累托有效控制律]
+\label{def:ch4_pareto}
+若不存在另一个可容许控制律 $\tilde u$，使得 $J_p(\xi_0,\tilde u)\le J_p(\xi_0,u)$ 且 $J_f(\xi_0,\tilde u)\le J_f(\xi_0,u)$，并且至少一个不等式严格成立，则称控制律 $u$ 对双目标代价 $(J_p,J_f)$ 是帕累托有效的。
+\end{definition}
+
+在凸二次情形下，加权标量化代价\eqref{eq:ch4_Jalpha}的最优解是支持帕累托解。在线阶段通过调节 $\alpha_{\mathrm{FP}}(t)$，可以在位置跟踪和力调节之间移动工作点，而不必每个控制周期重新求解完整多目标优化问题。
+
+
+\section{折扣帕累托控制器设计}
+\label{sec:ch4_game_controller}
+
+在前述增广模型和环境估计基础上，本节将位置跟踪与力调节写成两个参与方的折扣代价，并由帕累托权重给出统一反馈律。这样既保留位置--力权衡的可解释性，又便于在线根据接触安全状态选择控制增益。
+
+\subsection{位置--力参与方与帕累托反馈律}
+\label{subsec:ch4_players}
+
+本章将位置跟踪和力调节视为两个合作参与方。位置参与方主要惩罚 $e_p,e_v$，使工具沿期望扫描路径运动；力参与方主要惩罚 $e_f,\sigma_f$，使接触力接近期望值并抑制稳态偏差。二者共享同一个控制输入 $u$，因此不能通过两个互不相关的控制回路分别求解。柔性环境刚度变化时，若单纯追求位置跟踪，可能导致力超调；若单纯追求力调节，则可能牺牲扫描轨迹覆盖质量。帕累托控制的作用正是显式描述这种任务级折中。
+
+\begin{assumption}[标称系统可镇定与可检测]
+\label{ass:ch4_stabilizable}
+标称系统矩阵对 $(A_c,B_c)$ 可镇定。对任意 $\alpha_{\mathrm{FP}}\in[\alpha_{\min},\alpha_{\max}]\subset(0,1)$，矩阵对 $(Q_\alpha^{1/2},A_c)$ 可检测，并且 $R_\alpha\succ0$。
+\end{assumption}
+
+\begin{lemma}[标称系统下的折扣哈密顿--雅可比--贝尔曼方程]
+\label{lem:ch4_hjb}
+对于标称系统\eqref{eq:ch4_nominal_model}和折扣代价\eqref{eq:ch4_Jalpha}，若 $V_\alpha(\xi)$ 为最优值函数，则其满足折扣哈密顿--雅可比--贝尔曼方程
+\begin{equation}
+  0=\min_u\left[\xi^{\T}Q_\alpha\xi+u^{\T}R_\alpha u+\nabla V_\alpha^{\T}(A_c\xi+B_cu)-\gamma V_\alpha\right].
+  \label{eq:ch4_hjb}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+由动态规划原理，从任意时刻 $t$ 开始的最优值函数等于当前瞬时代价与后续最优代价之和。对折扣型无限时域问题，在一个微小时间区间 $[t,t+\Delta t]$ 上展开，有
+\begin{align}
+  V_\alpha(\xi(t))=&\min_u\int_t^{t+\Delta t}\e^{-\gamma(\tau-t)}\ell_\alpha(\xi(\tau),u(\tau))\dd\tau \\
+  &+\e^{-\gamma\Delta t}V_\alpha(\xi(t+\Delta t)),
+\end{align}
+其中 $\ell_\alpha(\xi,u)=\xi^{\T}Q_\alpha\xi+u^{\T}R_\alpha u$。对 $V_\alpha(\xi(t+\Delta t))$ 作一阶展开，并令 $\Delta t$ 趋近于零，整理可得\eqref{eq:ch4_hjb}。引理得证。
+\end{proof}
+
+在标量化代价建立后，下面求解对应的帕累托反馈律。
+\label{subsec:ch4_pareto_law}
+
+\begin{theorem}[标称系统下的折扣帕累托最优反馈律]
+\label{thm:ch4_discount_lqr}
+在\cref{ass:ch4_stabilizable}成立的条件下，给定固定 $\alpha_{\mathrm{FP}}\in[\alpha_{\min},\alpha_{\max}]$。若 $P_\alpha=P_\alpha^{\T}\succeq0$ 是折扣代数黎卡提方程
+\begin{equation}
+  A_c^{\T}P_\alpha+P_\alpha A_c-P_\alpha B_cR_\alpha^{-1}B_c^{\T}P_\alpha+Q_\alpha-\gamma P_\alpha=0
+  \label{eq:ch4_discount_are}
+\end{equation}
+的稳定化解，则折扣标量化代价\eqref{eq:ch4_Jalpha}对应的最优反馈律为
+\begin{equation}
+  u_\alpha^*(\xi)=-R_\alpha^{-1}B_c^{\T}P_\alpha\xi .
+  \label{eq:ch4_u_star}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+设二次型值函数为
+\begin{equation}
+  V_\alpha(\xi)=\xi^{\T}P_\alpha\xi .
+\end{equation}
+则 $\nabla V_\alpha=2P_\alpha\xi$。将其代入\eqref{eq:ch4_hjb}中的哈密顿函数，得到
+\begin{equation}
+  \mathcal{H}_\alpha(\xi,u)=\xi^{\T}Q_\alpha\xi+u^{\T}R_\alpha u+2\xi^{\T}P_\alpha A_c\xi+2\xi^{\T}P_\alpha B_cu-\gamma\xi^{\T}P_\alpha\xi .
+\end{equation}
+对 $u$ 求偏导，有
+\begin{equation}
+  \frac{\partial\mathcal{H}_\alpha}{\partial u}=2R_\alpha u+2B_c^{\T}P_\alpha\xi .
+\end{equation}
+由 $R_\alpha\succ0$ 可知哈密顿函数关于 $u$ 严格凸。令偏导为零，得到唯一极小点
+\begin{equation}
+  u_\alpha^*(\xi)=-R_\alpha^{-1}B_c^{\T}P_\alpha\xi .
+\end{equation}
+将该控制律代回\eqref{eq:ch4_hjb}，得到
+\begin{equation}
+  \xi^{\T}\left[A_c^{\T}P_\alpha+P_\alpha A_c-P_\alpha B_cR_\alpha^{-1}B_c^{\T}P_\alpha+Q_\alpha-\gamma P_\alpha\right]\xi=0 .
+\end{equation}
+由于该式对任意 $\xi$ 成立，括号中的矩阵必须为零，因此 $P_\alpha$ 满足\eqref{eq:ch4_discount_are}。定理得证。
+\end{proof}
+
+为了满足实时控制要求，反馈增益采用离线表和在线插值实现。
+\label{subsec:ch4_offline_online}
+
+上述折扣帕累托控制律给出了固定 $\alpha_{\mathrm{FP}}$ 与局部接触参数下的最优反馈解。为了满足高频接触控制实时性，实际实现采用离线--在线结构。离线阶段在 $\alpha_{\mathrm{FP}}$ 与局部刚度估计 $\hat K_e$ 的二维网格上求解\eqref{eq:ch4_discount_are}，得到增益表
+\begin{equation}
+  K(\alpha_{\mathrm{FP}},\hat K_e)=R_\alpha^{-1}B_c^{\T}P_\alpha .
+  \label{eq:ch4_gain_table}
+\end{equation}
+在线阶段只更新 $\alpha_{\mathrm{FP}}(t)$ 和环境估计器给出的 $\hat K_e(t)$，并通过插值得到当前反馈增益。这样，控制循环不需要在线求解哈密顿--雅可比--贝尔曼方程、黎卡提方程或优化问题。该实现顺序也明确区分了“控制器求解”“环境参数估计”和“优先级仲裁”：控制器给出每个候选优先级与局部刚度下的最优反馈律，环境估计器提供当前表观刚度，仲裁器只负责根据接触安全状态选择合适的优先级。
+
+\section{安全仲裁与约束执行}
+\label{sec:ch4_arbitration_execution}
+
+折扣帕累托控制器给出了可调优先级下的位置--力反馈律，但优先级本身仍需依据接触风险在线确定。下面从力安全裕度出发构造仲裁参数，并说明在远心运动约束下如何将接触点参考转化为法兰空间执行命令。
+
+\subsection{力安全裕度仲裁}
+\label{subsec:ch4_force_margin}
+
+在折扣帕累托控制器已经建立的基础上，需要进一步说明 $\alpha_{\mathrm{FP}}(t)$ 如何在线选择。旧的仲裁方式常将环境刚度作为模糊输入之一。然而，刚度是环境属性，不直接等价于安全风险。高刚度环境中只要压入很浅，接触力仍可能安全；低刚度环境中若压入过深，接触力也可能越界。因此，本章将交互力相对上下安全边界的裕度作为 $\alpha_{\mathrm{FP}}$ 调节的核心依据。
+
+\begin{definition}[交互力安全裕度]
+\label{def:ch4_force_margin}
+给定受控力 $y_f(t)$ 和安全范围 $[F_{\min},F_{\max}]$，定义到下界和上界的距离为
+\begin{equation}
+  d_{\mathrm{lower}}(t)=y_f(t)-F_{\min},
+  \quad d_{\mathrm{upper}}(t)=F_{\max}-y_f(t) .
+  \label{eq:ch4_force_distances}
+\end{equation}
+归一化安全裕度定义为
+\begin{equation}
+  \rho_F(t)=\sat\left(\frac{\min\{d_{\mathrm{lower}}(t),d_{\mathrm{upper}}(t)\}}{(F_{\max}-F_{\min})/2},0,1\right) .
+  \label{eq:ch4_rhoF}
+\end{equation}
+边界方向变量定义为
+\begin{equation}
+  s_F(t)=\sat\left(\frac{y_f(t)-F_d}{(F_{\max}-F_{\min})/2},-1,1\right) .
+  \label{eq:ch4_sF}
+\end{equation}
+其中 $\rho_F(t)$ 越接近 $1$ 表示接触力越接近安全区间中部，越接近 $0$ 表示越接近上下边界；$s_F(t)>0$ 表示接触力偏大，$s_F(t)<0$ 表示接触力偏小。
+\end{definition}
+
+模糊输入包括力误差幅值、安全裕度和位置误差幅值。定义归一化力偏差
+\begin{equation}
+  r_e(t)=\frac{|y_f(t)-F_d|}{\varepsilon_f},
+  \label{eq:ch4_re}
+\end{equation}
+其中 $\varepsilon_f>0$ 为允许力误差尺度。位置误差指标可取
+\begin{equation}
+  r_p(t)=\frac{\norm{e_p(t)}}{\varepsilon_p},
+  \label{eq:ch4_rp}
+\end{equation}
+其中 $\varepsilon_p>0$ 为允许位置误差尺度。模糊推理输出基础优先级
+\begin{equation}
+  \alpha_0(t)=\mathcal{F}_{\mathrm{FP}}(r_e(t),\rho_F(t),r_p(t)).
+  \label{eq:ch4_alpha0}
+\end{equation}
+
+仅由模糊规则直接输出 $\alpha_0$ 还不够。原因很简单：同样的力误差，在安全区间中央和靠近边界时具有不同风险；同样的接触力，在低刚度和高刚度环境下也对应不同压入敏感性。定义风险强度 $r_F(t)=1-\rho_F(t)$。在无几何约束的纯力--位扫描中，低力风险通常需要降低 $\alpha_{\mathrm{FP}}$，给力调节留出空间；而在高刚度或远心运动约束场景中，高力风险往往伴随微小压入误差和工具姿态耦合，此时适当提高位置优先级反而能抑制继续压入。因此本文采用带方向的力裕度安全修正：
+\begin{equation}
+  \alpha_{\mathrm{safe}}(t)=\alpha_0(t)+k_{\mathrm{upper}}r_F(t)\max\{s_F(t),0\}-k_{\mathrm{lower}}r_F(t)\max\{-s_F(t),0\},
+  \label{eq:ch4_alpha_safe}
+\end{equation}
+其中 $k_{\mathrm{upper}}>0$ 与 $k_{\mathrm{lower}}>0$ 为修正系数。上界风险项提高 $\alpha_{\mathrm{FP}}$，用于增强位置和远心运动稳定；下界风险项降低 $\alpha_{\mathrm{FP}}$，用于恢复接触力并避免脱离接触。这个方向性设计看上去比“力越危险就越力控”更绕一点，但在长工具接触任务中更符合实际：高刚度接触下，多压入一点点就可能带来明显力峰值，先稳住位置和工具轴线，往往比继续释放力控更安全。
+
+实际实现中还使用连续阶段先验。令 $\alpha_\phi(t)$ 表示由自由空间、接近、接触瞬态、稳定接触和退回阶段给出的先验优先级，$w_\phi(t)\in[0,1]$ 表示该先验的权重，则
+\begin{equation}
+  \alpha_{\mathrm{ph}}(t)=w_\phi(t)\alpha_\phi(t)+\bigl(1-w_\phi(t)\bigr)\alpha_{\mathrm{safe}}(t).
+  \label{eq:ch4_alpha_phase_fusion}
+\end{equation}
+自由空间和退回阶段 $w_\phi$ 较大，使系统位置优先；稳定接触后 $w_\phi$ 逐渐降低，使力裕度和刚度响应主导仲裁。
+
+为使 $\alpha_{\mathrm{FP}}$ 对环境刚度变化具有可观察的稳态响应，进一步定义刚度门控
+\begin{equation}
+  g_K(t)=S\left(\frac{\hat K_e(t)-K_{\mathrm{low}}}{K_{\mathrm{high}}-K_{\mathrm{low}}}\right),
+  \quad
+  S(q)=q^2(3-2q),\ q\in[0,1],
+  \label{eq:ch4_gK}
+\end{equation}
+以及刚度目标优先级
+\begin{equation}
+  \alpha_K(t)=\bigl(1-g_K(t)\bigr)\alpha_{\mathrm{low}}+g_K(t)\alpha_{\mathrm{high}}.
+  \label{eq:ch4_alphaK}
+\end{equation}
+其中 $\alpha_{\mathrm{low}}$ 对应低刚度环境下更偏力调节的设定，$\alpha_{\mathrm{high}}$ 对应高刚度环境下更偏位置和几何约束稳定的设定。将刚度项与阶段--力裕度输出混合，得到
+\begin{equation}
+  \alpha_r(t)=
+  \sat\left(
+  (1-\beta_K)\alpha_{\mathrm{ph}}(t)+\beta_K\alpha_K(t),
+  \alpha_{\min},\alpha_{\max}
+  \right).
+  \label{eq:ch4_alpha_r}
+\end{equation}
+需要强调的是，本章仿真实现采用逐轴优先级。为了避免力控释放影响横向扫描轨迹，令
+\begin{equation}
+  \boldsymbol{\alpha}_{\mathrm{FP}}(t)=
+  \begin{bmatrix}
+  1&1&\alpha_{\mathrm{FP},z}(t)
+  \end{bmatrix}^{\T}.
+  \label{eq:ch4_axis_alpha}
+\end{equation}
+也就是说，$x/y$ 方向始终严格位置跟踪，动态仲裁只作用于 $z$ 方向压入深度。下文若无特别说明，$\alpha_{\mathrm{FP}}$ 即指 $\alpha_{\mathrm{FP},z}$。最终优先级由一阶滤波得到：
+\begin{equation}
+  \dot\alpha_{\mathrm{FP}}(t)=\lambda_{\alpha}(\alpha_r(t)-\alpha_{\mathrm{FP}}(t)),\quad \lambda_\alpha>0 .
+  \label{eq:ch4_alpha_ode}
+\end{equation}
+
+\begin{lemma}[力--位优先级的区间不变性与变化率上界]
+\label{lem:ch4_alpha_bound}
+若 $\alpha_{\mathrm{FP}}(0)\in[\alpha_{\min},\alpha_{\max}]$，且 $\alpha_r(t)\in[\alpha_{\min},\alpha_{\max}]$，则\eqref{eq:ch4_alpha_ode}生成的 $\alpha_{\mathrm{FP}}(t)$ 满足
+\begin{equation}
+  \alpha_{\mathrm{FP}}(t)\in[\alpha_{\min},\alpha_{\max}],\quad \forall t\ge0,
+  \label{eq:ch4_alpha_interval}
+\end{equation}
+并且
+\begin{equation}
+  |\dot\alpha_{\mathrm{FP}}(t)|\le \lambda_\alpha(\alpha_{\max}-\alpha_{\min}).
+  \label{eq:ch4_alpha_rate}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+当 $\alpha_{\mathrm{FP}}=\alpha_{\min}$ 时，由 $\alpha_r(t)\ge\alpha_{\min}$ 可得 $\dot\alpha_{\mathrm{FP}}\ge0$；当 $\alpha_{\mathrm{FP}}=\alpha_{\max}$ 时，由 $\alpha_r(t)\le\alpha_{\max}$ 可得 $\dot\alpha_{\mathrm{FP}}\le0$。因此区间 $[\alpha_{\min},\alpha_{\max}]$ 为正不变集。进一步，由\eqref{eq:ch4_alpha_ode}有
+\begin{equation}
+  |\dot\alpha_{\mathrm{FP}}|=\lambda_\alpha|\alpha_r-\alpha_{\mathrm{FP}}|\le\lambda_\alpha(\alpha_{\max}-\alpha_{\min}).
+\end{equation}
+引理得证。
+\end{proof}
+
+\subsection{远心运动约束执行}
+\label{subsec:ch4_rcm_mapping}
+
+本章采用工具期望到法兰期望的正向映射。给定工具尖端期望位置 $x_t^d$，定义
+\begin{equation}
+  n_d=\frac{p_c-x_t^d}{\norm{p_c-x_t^d}},
+  \label{eq:ch4_nd}
+\end{equation}
+法兰期望位置为
+\begin{equation}
+  x_F^d=x_t^d+Ln_d .
+  \label{eq:ch4_xf}
+\end{equation}
+若 $r=\norm{p_c-x_t^d}$，则速度映射为
+\begin{equation}
+  \dot x_F^d=\left[I-\frac{L}{r}(I-n_dn_d^{\T})\right]\dot x_t^d .
+  \label{eq:ch4_vf}
+\end{equation}
+其中 $I-n_dn_d^{\T}$ 为垂直于工具轴方向的投影矩阵。控制器在法兰空间计算位置误差和速度误差，在力维度使用工具接触力误差和力误差积分状态，随后生成法兰平移控制输入
+\begin{equation}
+  u_F=-K(\alpha_{\mathrm{FP}},\hat K_e)\xi_F,
+  \label{eq:ch4_uF}
+\end{equation}
+其中 $\xi_F$ 为由法兰位置误差、法兰速度误差、工具接触力误差和力误差积分构成的增广状态。姿态控制输入 $u_\phi$ 与 $u_F$ 合成为广义力，关节力矩为
+\begin{equation}
+  \tau=J_F^{\T}\begin{bmatrix}u_F&u_\phi^{\T}\end{bmatrix}^{\T} .
+  \label{eq:ch4_tau}
+\end{equation}
+该方式避免了先在工具空间产生控制力再进行杠杆缩放的物理歧义，也便于将 远心运动姿态调节纳入同一法兰空间闭环。
+
+至此，本章已经给出了增广力--位模型、环境参数估计、折扣帕累托反馈律、力安全裕度仲裁以及远心运动执行映射。完整在线流程可以理解为三个连续环节。第一，系统根据接触力和压入量更新表观刚度观测值，并通过低通估计得到 $\hat K_e$；同时根据扫描参考 $x_d$、实际位置和速度计算位置误差 $e_p$、速度误差 $e_v$、力误差 $e_f$ 以及泄漏积分状态 $\sigma_f$，形成增广状态 $\xi$。这一环节把环境软硬变化和当前力--位误差统一为反馈控制器可使用的状态与调度变量。
+
+第二，仲裁器根据接触力到安全上下界的距离计算力安全裕度 $\rho_F$ 和边界方向变量 $s_F$，再结合力误差、位置误差、安全裕度、阶段先验以及刚度响应项得到目标优先级 $\alpha_r$。随后，$\alpha_r$ 经过限幅和一阶滤波生成当前力--位优先级 $\alpha_{\mathrm{FP}}$。这样处理的目的，是让优先级变化既能响应接触风险，又不会被瞬时噪声或刚接触瞬态牵引得过快。
+
+第三，控制器根据 $(\alpha_{\mathrm{FP}},\hat K_e)$ 从离线增益表中查表或插值得到反馈增益 $K$，并计算 $u_F=-K\xi_F$。若任务存在远心运动约束，则工具尖端参考还需要先映射为法兰参考，再与姿态调节输入合成广义任务空间控制量，最后通过雅可比转置或等效任务空间接口生成机器人执行命令。由此可见，本章方法的核心不是直接用刚度替代安全判断，而是先由实时接触力计算安全裕度，再用刚度估计调节优先级的稳态趋势。这样既保留了接触力边界的直接安全意义，又使控制器能够识别软硬环境变化对压入深度的放大作用。
+\section{鲁棒性与稳定性分析}
+\label{sec:ch4_theory}
+
+由于柔性接触任务不可避免地存在模型残差、刚度失配和在线仲裁变化，闭环分析需要同时覆盖名义最优性与扰动有界性。以下先给出名义折扣系统的稳定结论，再讨论残差项和优先级变化对稳定裕度的影响。
+
+\subsection{名义稳定性与扰动有界性}
+\label{subsec:ch4_nominal_theory}
+
+\begin{theorem}[固定力--位优先级下的闭环稳定性]
+\label{thm:ch4_fixed_stability}
+在\cref{ass:ch4_stabilizable}成立的条件下，给定固定 $\alpha_{\mathrm{FP}}\in[\alpha_{\min},\alpha_{\max}]$，采用\cref{thm:ch4_discount_lqr}得到的反馈律后，若闭环矩阵
+\begin{equation}
+  A_{\mathrm{cl},\alpha}=A_c-B_cR_\alpha^{-1}B_c^{\T}P_\alpha
+  \label{eq:ch4_Acl}
+\end{equation}
+为赫尔维茨，则标称闭环系统渐近稳定。
+\end{theorem}
+
+\begin{proof}
+取李雅普诺夫函数 $V_\alpha(\xi)=\xi^{\T}P_\alpha\xi$。沿标称闭环系统 $\dot\xi=A_{\mathrm{cl},\alpha}\xi$ 求导，有
+\begin{equation}
+  \dot V_\alpha=\xi^{\T}(A_{\mathrm{cl},\alpha}^{\T}P_\alpha+P_\alpha A_{\mathrm{cl},\alpha})\xi .
+\end{equation}
+由折扣黎卡提方程\eqref{eq:ch4_discount_are}和反馈律定义可得
+\begin{equation}
+  A_{\mathrm{cl},\alpha}^{\T}P_\alpha+P_\alpha A_{\mathrm{cl},\alpha}= -Q_\alpha-P_\alpha B_cR_\alpha^{-1}B_c^{\T}P_\alpha+\gamma P_\alpha .
+  \label{eq:ch4_discount_lyap_identity}
+\end{equation}
+由于折扣项 $\gamma P_\alpha$ 会减弱普通李雅普诺夫耗散不等式，实际闭环稳定性由稳定化黎卡提解和 $A_{\mathrm{cl},\alpha}$ 的赫尔维茨性保证。更具体地，若 $A_{\mathrm{cl},\alpha}$ 为赫尔维茨，则对任意 $W_\alpha\succ0$，存在唯一 $\Pi_\alpha\succ0$ 满足
+\begin{equation}
+  A_{\mathrm{cl},\alpha}^{\T}\Pi_\alpha+\Pi_\alpha A_{\mathrm{cl},\alpha}=-W_\alpha .
+\end{equation}
+取 $\bar V_\alpha=\xi^{\T}\Pi_\alpha\xi$，沿闭环系统求导得到
+\begin{equation}
+  \dot{\bar V}_\alpha=-\xi^{\T}W_\alpha\xi<0,
+  \quad \xi\ne0 .
+\end{equation}
+因此标称闭环系统渐近稳定。定理得证。
+\end{proof}
+
+在名义稳定性之外，还需要分析残差和接触参数失配对性能的影响。
+\label{subsec:ch4_residual_theory}
+
+\begin{theorem}[残差项影响下的实际性能上界]
+\label{thm:ch4_residual_performance}
+考虑真实系统
+\begin{equation}
+  \dot\xi=A_c\xi+B_cu+d(\xi,t),
+  \label{eq:ch4_real_system}
+\end{equation}
+其中残差项在局部紧集内满足 $\norm{d(\xi,t)}\le\bar d$。设 $u_\alpha^*(\xi)$ 为标称系统的折扣最优反馈律，并假设真实闭环轨迹满足
+\begin{equation}
+  \int_0^\infty \e^{-\gamma t}\norm{\xi(t)}^2\dd t\le c_\xi\norm{\xi_0}^2+c_d\bar d^2 .
+  \label{eq:ch4_state_energy_bound}
+\end{equation}
+则真实系统采用标称反馈律时，其折扣代价满足
+\begin{equation}
+  J_\alpha^{\mathrm{real}}(\xi_0,u_\alpha^*)\le V_\alpha(\xi_0)+c_1\norm{\xi_0}^2+c_2\bar d^2,
+  \label{eq:ch4_real_cost_bound}
+\end{equation}
+其中 $c_1,c_2>0$ 与 $P_\alpha$、$\gamma$、残差界和闭环衰减性质有关。
+\end{theorem}
+
+\begin{proof}
+令 $V_\alpha(\xi)=\xi^{\T}P_\alpha\xi$。沿真实系统\eqref{eq:ch4_real_system}求导，有
+\begin{equation}
+  \dot V_\alpha=\nabla V_\alpha^{\T}(A_c\xi+B_cu_\alpha^*)+\nabla V_\alpha^{\T}d(\xi,t) .
+  \label{eq:ch4_Vdot_real}
+\end{equation}
+根据折扣哈密顿--雅可比--贝尔曼方程，在标称最优控制律下有
+\begin{equation}
+  \nabla V_\alpha^{\T}(A_c\xi+B_cu_\alpha^*)+\xi^{\T}Q_\alpha\xi+(u_\alpha^*)^{\T}R_\alpha u_\alpha^*-\gamma V_\alpha=0 .
+  \label{eq:ch4_hjb_on_policy}
+\end{equation}
+将\eqref{eq:ch4_Vdot_real}代入\eqref{eq:ch4_hjb_on_policy}，得到
+\begin{equation}
+  \xi^{\T}Q_\alpha\xi+(u_\alpha^*)^{\T}R_\alpha u_\alpha^*=\gamma V_\alpha-\dot V_\alpha+\nabla V_\alpha^{\T}d(\xi,t) .
+  \label{eq:ch4_stage_real}
+\end{equation}
+两边乘以 $\e^{-\gamma t}$，并利用
+\begin{equation}
+  \frac{\dd}{\dd t}\left(\e^{-\gamma t}V_\alpha(\xi(t))\right)=\e^{-\gamma t}\dot V_\alpha-\gamma\e^{-\gamma t}V_\alpha,
+\end{equation}
+可得
+\begin{align}
+  &\e^{-\gamma t}\left[\xi^{\T}Q_\alpha\xi+(u_\alpha^*)^{\T}R_\alpha u_\alpha^*\right] \\
+  &\quad =-\frac{\dd}{\dd t}\left(\e^{-\gamma t}V_\alpha(\xi(t))\right)+\e^{-\gamma t}\nabla V_\alpha^{\T}d(\xi,t).
+\end{align}
+对 $[0,T]$ 积分，得到
+\begin{align}
+  &\int_0^T\e^{-\gamma t}\left[\xi^{\T}Q_\alpha\xi+(u_\alpha^*)^{\T}R_\alpha u_\alpha^*\right]\dd t \\
+  &\quad =V_\alpha(\xi_0)-\e^{-\gamma T}V_\alpha(\xi(T))+\int_0^T\e^{-\gamma t}\nabla V_\alpha^{\T}d(\xi,t)\dd t .
+\end{align}
+由于 $V_\alpha\ge0$，舍去非正项 $-\e^{-\gamma T}V_\alpha(\xi(T))$ 并令 $T$ 趋于无穷，得到
+\begin{equation}
+  J_\alpha^{\mathrm{real}}(\xi_0,u_\alpha^*)\le V_\alpha(\xi_0)+\int_0^\infty\e^{-\gamma t}|\nabla V_\alpha^{\T}d(\xi,t)|\dd t .
+  \label{eq:ch4_real_cost_prebound}
+\end{equation}
+由于 $\nabla V_\alpha=2P_\alpha\xi$，有
+\begin{equation}
+  |\nabla V_\alpha^{\T}d(\xi,t)|\le2\norm{P_\alpha}\norm{\xi(t)}\bar d .
+\end{equation}
+对任意 $\varepsilon_d>0$，由杨氏不等式得到
+\begin{equation}
+  2\norm{P_\alpha}\norm{\xi(t)}\bar d\le \varepsilon_d\norm{\xi(t)}^2+\frac{\norm{P_\alpha}^2}{\varepsilon_d}\bar d^2 .
+\end{equation}
+代入\eqref{eq:ch4_real_cost_prebound}，并利用\eqref{eq:ch4_state_energy_bound}以及 $\int_0^\infty \e^{-\gamma t}\dd t=1/\gamma$，可得
+\begin{equation}
+  J_\alpha^{\mathrm{real}}(\xi_0,u_\alpha^*)\le V_\alpha(\xi_0)+\varepsilon_d c_\xi\norm{\xi_0}^2+\left(\varepsilon_d c_d+\frac{\norm{P_\alpha}^2}{\varepsilon_d\gamma}\right)\bar d^2 .
+\end{equation}
+令 $c_1=\varepsilon_d c_\xi$，$c_2=\varepsilon_d c_d+\norm{P_\alpha}^2/(\varepsilon_d\gamma)$，得到\eqref{eq:ch4_real_cost_bound}。定理得证。
+\end{proof}
+
+\begin{theorem}[接触模型参数误差下的最优反馈误差界]
+\label{thm:ch4_param_mismatch}
+设真实接触参数为 $\theta_{\mathrm{true}}=\theta_{\mathrm{nom}}+\Delta\theta$，其中
+\begin{equation}
+  \theta=\begin{bmatrix}\vecop(K_e)^{\T}&\vecop(B_e)^{\T}\end{bmatrix}^{\T} .
+\end{equation}
+对应系统矩阵满足
+\begin{equation}
+  A_{\mathrm{true}}=A_{\mathrm{nom}}+\Delta A,
+  \quad \norm{\Delta A}\le L_A\norm{\Delta\theta} .
+  \label{eq:ch4_A_mismatch}
+\end{equation}
+若标称折扣黎卡提方程存在稳定化解 $P_{\mathrm{nom}}$，且对应闭环矩阵具有稳定裕度，则当 $\norm{\Delta\theta}$ 足够小时，真实黎卡提解 $P_{\mathrm{true}}$ 存在，并满足
+\begin{equation}
+  \norm{P_{\mathrm{true}}-P_{\mathrm{nom}}}\le C_P\norm{\Delta\theta} .
+  \label{eq:ch4_P_error}
+\end{equation}
+进一步地，最优反馈增益和最优控制输入满足
+\begin{equation}
+  \norm{K_{\mathrm{true}}-K_{\mathrm{nom}}}\le C_K\norm{\Delta\theta},
+  \label{eq:ch4_K_error}
+\end{equation}
+\begin{equation}
+  \norm{u_{\mathrm{true}}^*(\xi)-u_{\mathrm{nom}}^*(\xi)}\le C_K\norm{\Delta\theta}\norm{\xi} .
+  \label{eq:ch4_u_error}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+定义折扣黎卡提算子
+\begin{equation}
+  \mathcal{R}(P,A)=A^{\T}P+PA-PB_cR_\alpha^{-1}B_c^{\T}P+Q_\alpha-\gamma P .
+\end{equation}
+标称解满足 $\mathcal{R}(P_{\mathrm{nom}},A_{\mathrm{nom}})=0$，真实解满足 $\mathcal{R}(P_{\mathrm{true}},A_{\mathrm{true}})=0$。令
+\begin{equation}
+  \Delta P=P_{\mathrm{true}}-P_{\mathrm{nom}},
+  \quad \Delta A=A_{\mathrm{true}}-A_{\mathrm{nom}} .
+\end{equation}
+在 $(P_{\mathrm{nom}},A_{\mathrm{nom}})$ 处展开，得到
+\begin{equation}
+  0=\mathcal{L}(\Delta P)+\Delta A^{\T}P_{\mathrm{nom}}+P_{\mathrm{nom}}\Delta A+\mathcal{N}(\Delta P,\Delta A),
+  \label{eq:ch4_riccati_perturb}
+\end{equation}
+其中线性算子为
+\begin{equation}
+  \mathcal{L}(\Delta P)=A_{\mathrm{cl,nom}}^{\T}\Delta P+\Delta P A_{\mathrm{cl,nom}}-\gamma\Delta P,
+\end{equation}
+而 $\mathcal{N}(\Delta P,\Delta A)$ 包含二阶小量，例如 $\Delta A^{\T}\Delta P$、$\Delta P\Delta A$ 和 $-\Delta P B_cR_\alpha^{-1}B_c^{\T}\Delta P$。由于 $A_{\mathrm{cl,nom}}$ 具有稳定裕度，$\mathcal{L}$ 可逆，并存在常数 $c_L>0$，使得
+\begin{equation}
+  \norm{\mathcal{L}^{-1}(Y)}\le c_L\norm{Y} .
+\end{equation}
+由\eqref{eq:ch4_riccati_perturb}可得
+\begin{equation}
+  \norm{\Delta P}\le c_L\left(2\norm{P_{\mathrm{nom}}}\norm{\Delta A}+\norm{\mathcal{N}(\Delta P,\Delta A)}\right).
+  \label{eq:ch4_deltaP_pre}
+\end{equation}
+当 $\norm{\Delta A}$ 和 $\norm{\Delta P}$ 足够小时，存在常数 $c_N>0$，使得
+\begin{equation}
+  \norm{\mathcal{N}(\Delta P,\Delta A)}\le c_N\left(\norm{\Delta A}\norm{\Delta P}+\norm{\Delta P}^2\right).
+\end{equation}
+利用小扰动条件，可将二阶项吸收到\eqref{eq:ch4_deltaP_pre}左端，得到
+\begin{equation}
+  \norm{\Delta P}\le C_A\norm{\Delta A} .
+\end{equation}
+再由\eqref{eq:ch4_A_mismatch}得到\eqref{eq:ch4_P_error}，其中 $C_P=C_A L_A$。由于
+\begin{equation}
+  K_{\mathrm{true}}-K_{\mathrm{nom}}=R_\alpha^{-1}B_c^{\T}(P_{\mathrm{true}}-P_{\mathrm{nom}}),
+\end{equation}
+有
+\begin{equation}
+  \norm{K_{\mathrm{true}}-K_{\mathrm{nom}}}\le \norm{R_\alpha^{-1}B_c^{\T}}\,C_P\norm{\Delta\theta} .
+\end{equation}
+令 $C_K=\norm{R_\alpha^{-1}B_c^{\T}}C_P$，得到\eqref{eq:ch4_K_error}。最后，由 $u^*(\xi)=-K\xi$ 可得\eqref{eq:ch4_u_error}。定理得证。
+\end{proof}
+
+最后讨论动态优先级变化率与闭环稳定裕度之间的关系。
+\label{subsec:ch4_rate_margin}
+
+动态 $\alpha_{\mathrm{FP}}(t)$ 提高了控制器对力风险的响应能力，但也会引入时变反馈增益。为刻画其影响，定义在线近似值函数
+\begin{equation}
+  \hat V_{\alpha}(\xi)=\xi^{\T}P_{\alpha}\xi .
+  \label{eq:ch4_val_online}
+\end{equation}
+若在线 $P_{\alpha}$ 由离线表插值得到，或者由少量网格点组合而成，则可能存在贝尔曼残差
+\begin{equation}
+  \Delta_\alpha=A_c^{\T}P_\alpha+P_\alpha A_c-P_\alpha B_cR_\alpha^{-1}B_c^{\T}P_\alpha+Q_\alpha-\gamma P_\alpha .
+  \label{eq:ch4_bellman_residual}
+\end{equation}
+令
+\begin{equation}
+  \epsilon_B=\max_{\alpha\in[\alpha_{\min},\alpha_{\max}]}\norm{\Delta_\alpha} .
+  \label{eq:ch4_eps_B}
+\end{equation}
+当 $P_\alpha$ 是精确折扣 ARE 解时，$\epsilon_B=0$；当存在插值误差、模型近似或数值误差时，$\epsilon_B$ 表示值函数近似误差的上界。
+
+\begin{theorem}[时变优先级下的性能损失上界]
+\label{thm:ch4_timevarying_performance}
+设在线策略 $\hat u_\alpha(\xi)=-R_\alpha^{-1}B_c^{\T}P_\alpha\xi$ 可容许，且存在常数 $c>0$，使得
+\begin{equation}
+  \int_0^\infty \e^{-\gamma t}\norm{\xi(t)}^2\dd t\le c\norm{\xi_0}^2 .
+\end{equation}
+若 $\norm{\Delta_\alpha}\le\epsilon_B$，$\norm{\partial P_\alpha/\partial\alpha}\le L_P$，且 $|\dot\alpha_{\mathrm{FP}}(t)|\le v_\alpha$，则相对于理想时变折扣最优策略，在线近似策略的性能损失满足
+\begin{equation}
+  J_{\alpha(\cdot)}(\xi_0;\hat u_{\alpha(\cdot)})-J_{\alpha(\cdot)}^*(\xi_0)
+  \le 2c(\epsilon_B+v_\alpha L_P)\norm{\xi_0}^2 .
+  \label{eq:ch4_perf_loss}
+\end{equation}
+\end{theorem}
+
+\begin{proof}
+对时变近似值函数 $\hat V_{\alpha(t)}(\xi)=\xi^{\T}P_{\alpha(t)}\xi$，有
+\begin{equation}
+  \frac{\dd}{\dd t}\left(\e^{-\gamma t}\hat V_{\alpha(t)}(\xi(t))\right)=\e^{-\gamma t}\left[\nabla \hat V_\alpha^{\T}\dot\xi-\gamma\hat V_\alpha+\frac{\partial \hat V_\alpha}{\partial\alpha}\dot\alpha\right].
+\end{equation}
+由哈密顿函数定义可得，对任意可容许控制 $u$，
+\begin{equation}
+  J_{\alpha(\cdot)}(\xi_0;u)=\hat V_{\alpha(0)}(\xi_0)+\int_0^\infty\e^{-\gamma t}\left[H_\alpha(\xi,\nabla\hat V_\alpha,u)+\frac{\partial \hat V_\alpha}{\partial\alpha}\dot\alpha\right]\dd t,
+  \label{eq:ch4_J_identity_timevarying}
+\end{equation}
+其中终端项在稳定性和折扣条件下消失。对在线贪婪策略 $\hat u_\alpha$，哈密顿函数残差满足
+\begin{equation}
+  |H_\alpha(\xi,\nabla\hat V_\alpha,
+  \hat u_\alpha)|=|\xi^{\T}\Delta_\alpha\xi|\le\epsilon_B\norm{\xi}^2 .
+\end{equation}
+同时
+\begin{equation}
+  \left|\frac{\partial \hat V_\alpha}{\partial\alpha}\dot\alpha\right|\le L_Pv_\alpha\norm{\xi}^2 .
+\end{equation}
+因此在线策略的代价上界为
+\begin{equation}
+  J_{\alpha(\cdot)}(\xi_0;\hat u_{\alpha(\cdot)})\le \hat V_{\alpha(0)}(\xi_0)+c(\epsilon_B+v_\alpha L_P)\norm{\xi_0}^2 .
+\end{equation}
+另一方面，理想最优策略的哈密顿函数不小于在线贪婪策略对应的最小哈密顿函数，因此可得下界
+\begin{equation}
+  J_{\alpha(\cdot)}^*(\xi_0)\ge \hat V_{\alpha(0)}(\xi_0)-c(\epsilon_B+v_\alpha L_P)\norm{\xi_0}^2 .
+\end{equation}
+将上下界相减，即得到\eqref{eq:ch4_perf_loss}。定理得证。
+\end{proof}
+
+\begin{remark}
+\cref{thm:ch4_timevarying_performance}说明，优先级变化率 $v_\alpha$ 不是单纯的工程滤波参数，而是影响性能损失上界的设计变量。较大的 $v_\alpha$ 提高力风险响应速度，但会增大 $v_\alpha L_P$ 项；较小的 $v_\alpha$ 能减小性能损失界，但可能使力越界响应滞后。因此，$\lambda_\alpha$ 应根据任务安全裕度、采样频率和闭环稳定裕度共同选择。
+\end{remark}
+
+\section{仿真结果与分析}
+\label{sec:ch4_simulation}
+
+\subsection{仿真设置}
+\label{subsec:ch4_sim_task}
+
+仿真任务设置为柔性表面恒力扫描。工具尖端沿给定方向低速移动，并与分段变刚度环境保持连续接触。为突出第四章方法相对于第三章刚性几何约束共享控制的增量，本章分别设置无远心运动约束和有远心运动约束两类场景。前者直接考察力--位仲裁策略在接触扫描中的作用；后者进一步引入长工具几何映射和远心运动约束误差，考察控制器在接触力调节、扫描轨迹跟踪和通道合规之间的综合权衡。
+
+本节使用本地 Gazebo 环境进行验证。虚拟接触面采用分段开尔文--沃伊特模型，控制频率为 $100\,\mathrm{Hz}$。接触刚发生后，系统先进入调整阶段，使接触力、刚度估计和力误差积分项收敛；该阶段不写入正式实验数据。正式扫描开始后，记录接触力、位置误差、远心运动误差、估计刚度 $\hat K_e$ 和力--位优先级 $\alpha_{\mathrm{FP}}$。这样处理以后，图中的短时振荡主要来自扫描中的刚度切换，而不是刚接触瞬间的非稳态冲击。
+
+表\ref{tab:ch4_env_params}先给出两类仿真场景的扫描目标、力安全区间、分段刚度和仲裁参数。该表的作用是说明实验并非只在一个固定柔性环境中调参，而是同时考察无几何约束接触扫描和带远心运动约束的长工具接触扫描。
+
+\begin{table}[htbp]
+\centering
+\caption{刚度敏感柔性接触扫描仿真参数}
+\label{tab:ch4_env_params}
+\scriptsize
+\begin{tabular}{@{}p{0.13\textwidth}p{0.30\textwidth}p{0.16\textwidth}p{0.30\textwidth}@{}}
+\toprule
+场景 & 扫描与力目标 & 分段刚度 $K_e/(\mathrm{N/m})$ & 仲裁刚度响应参数 \\
+\midrule
+无远心运动 &
+\begin{tabular}[t]{@{}l@{}}
+$x:0.40\to0.48\,\mathrm{m}$\\
+$F_d=1.0\,\mathrm{N}$\\
+$[F_{\min},F_{\max}]=[0.66,1.38]\,\mathrm{N}$
+\end{tabular}
+&
+\begin{tabular}[t]{@{}l@{}}
+$260/780$\\
+$220/1050$
+\end{tabular}
+&
+\begin{tabular}[t]{@{}l@{}}
+$K_{\mathrm{low}}=260$, $K_{\mathrm{high}}=760$\\
+$\alpha_{\mathrm{low}}=0.26$, $\alpha_{\mathrm{high}}=0.62$
+\end{tabular}
+\\
+远心运动 &
+\begin{tabular}[t]{@{}l@{}}
+$x:0.300\to0.332\,\mathrm{m}$\\
+$F_d=0.52\,\mathrm{N}$\\
+$[F_{\min},F_{\max}]=[0.36,0.90]\,\mathrm{N}$
+\end{tabular}
+&
+\begin{tabular}[t]{@{}l@{}}
+$260/780$\\
+$190/980$
+\end{tabular}
+&
+\begin{tabular}[t]{@{}l@{}}
+$K_{\mathrm{low}}=240$, $K_{\mathrm{high}}=420$\\
+$\alpha_{\mathrm{low}}=0.50$, $\alpha_{\mathrm{high}}=0.88$
+\end{tabular}
+\\
+远心运动几何 &
+\begin{tabular}[t]{@{}l@{}}
+$p_c=[0.3,0,0.235]^{\T}\,\mathrm{m}$\\
+$L=0.525\,\mathrm{m}$
+\end{tabular}
+& -- & RCM 误差进入 $\alpha_{\mathrm{FP}}$ 下限保护 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+从表\ref{tab:ch4_env_params}可以看出，两类场景的期望力、安全边界和刚度响应参数不同。无远心运动场景允许更大范围的力--位优先级变化，用于直接观察柔性接触中的位置--力折中；远心运动场景则加入几何约束保护，使优先级不能过度释放位置稳定性。
+
+对比策略包括固定优先级 $\alpha_{\mathrm{FP}}=0.8$、$\alpha_{\mathrm{FP}}=0.5$、$\alpha_{\mathrm{FP}}=0.2$，以及本文的连续力裕度仲裁策略。固定策略的作用是提供清晰的参照：较大的固定 $\alpha_{\mathrm{FP}}$ 往往有利于位置和远心运动稳定，较小的固定 $\alpha_{\mathrm{FP}}$ 则给力调节更多空间，但也容易在高刚度段放大振荡。连续力裕度仲裁并不预先选定某个折中点，而是根据力安全裕度、阶段先验和 $\hat K_e$ 在线移动折中点。
+
+进入仿真评价时，先给出本章使用的指标和参数设置。
+\label{subsec:ch4_metrics}
+
+力跟踪误差指标为
+\begin{equation}
+  E_F^{\mathrm{RMS}}=\sqrt{\frac{1}{N}\sum_{k=1}^{N}(y_{f,k}-F_d)^2} .
+  \label{eq:ch4_force_rmse}
+\end{equation}
+力安全边界违反次数为
+\begin{equation}
+  N_{\mathrm{upper}}=\sum_{k=1}^{N}\mathbb{I}(y_{f,k}>F_{\max}),
+  \quad
+  N_{\mathrm{lower}}=\sum_{k=1}^{N}\mathbb{I}(y_{f,k}<F_{\min}) .
+  \label{eq:ch4_violation_count}
+\end{equation}
+位置跟踪误差为
+\begin{equation}
+  E_x^{\mathrm{RMS}}=\sqrt{\frac{1}{N}\sum_{k=1}^{N}\norm{x_k-x_{d,k}}^2} .
+  \label{eq:ch4_position_rmse}
+\end{equation}
+几何约束误差为
+\begin{equation}
+  E_{\mathrm{gc}}^{\mathrm{RMS}}=\sqrt{\frac{1}{N}\sum_{k=1}^{N}e_{\mathrm{gc},k}^2} .
+  \label{eq:ch4_gc_rmse}
+\end{equation}
+控制输入强度用平均关节力矩范数表示：
+\begin{equation}
+  \bar\tau=\frac{1}{N}\sum_{k=1}^{N}\norm{\tau_k} .
+  \label{eq:ch4_tau_metric}
+\end{equation}
+此外，为了描述接触抖动，记录相邻采样接触力差分的标准差
+\begin{equation}
+  J_F=\operatorname{std}(y_{f,k}-y_{f,k-1}),
+  \label{eq:ch4_force_jitter}
+\end{equation}
+以及 $z$ 向位置误差差分的标准差
+\begin{equation}
+  J_z=\operatorname{std}(e_{p,z,k}-e_{p,z,k-1}).
+  \label{eq:ch4_z_jitter}
+\end{equation}
+同时记录 $\alpha_{\mathrm{FP}}(t)$ 的范围和优先级--刚度相关系数 $r_{\alpha K}$，用于验证刚度响应是否真实进入仲裁变量，而不只是由滤波或瞬态扰动造成偶然波动。该相关系数定义为
+\begin{equation}
+  r_{\alpha K}=
+  \operatorname{corr}(\alpha_{\mathrm{FP}},\hat K_e)
+  =
+  \frac{\sum_{k=1}^{N}(\alpha_{\mathrm{FP},k}-\bar\alpha_{\mathrm{FP}})(\hat K_{e,k}-\bar K_e)}
+       {\sqrt{\sum_{k=1}^{N}(\alpha_{\mathrm{FP},k}-\bar\alpha_{\mathrm{FP}})^2}
+        \sqrt{\sum_{k=1}^{N}(\hat K_{e,k}-\bar K_e)^2}},
+  \label{eq:ch4_alpha_k_corr}
+\end{equation}
+其中 $\bar\alpha_{\mathrm{FP}}$ 和 $\bar K_e$ 分别为力--位优先级和估计环境刚度的样本均值。$r_{\alpha K}$ 越接近 $1$，说明优先级随估计刚度增大而同步增大；越接近 $-1$，说明二者呈反向变化；接近 $0$ 则表示线性相关性较弱。本文使用该指标判断刚度响应项是否真正影响了仲裁结果。
+
+为便于表述，固定 $\alpha_{\mathrm{FP}}=0.8$、$0.5$、$0.2$ 的三组基线分别记为强位置优先、均衡优先和强力优先；本文的连续力安全裕度策略记为力裕度仲裁。
+
+表\ref{tab:ch4_no_rcm_results}首先给出无远心运动约束下的统计结果。该场景用于隔离几何约束影响，直接观察固定优先级和力裕度仲裁在柔性接触扫描中的差异。
+
+\begin{table}[htbp]
+\centering
+\caption{无远心运动场景下固定优先级与连续力裕度仲裁结果}
+\label{tab:ch4_no_rcm_results}
+\scriptsize
+\begin{tabular}{lcccc}
+\toprule
+指标 & 强位置优先 & 均衡优先 & 强力优先 & 力裕度仲裁 \\
+\midrule
+力均方根误差/N & $0.1440$ & $0.1302$ & $0.8557$ & $0.1336$ \\
+力峰值误差/N & $0.344$ & $0.226$ & $2.544$ & $0.240$ \\
+力抖动 $J_F$/N & $0.0021$ & $0.0020$ & $0.3612$ & $0.0017$ \\
+位置均方根误差/mm & $1.415$ & $1.447$ & $2.780$ & $1.449$ \\
+$z$ 向抖动 $J_z$/mm & $0.0032$ & $0.0048$ & $0.5489$ & $0.0056$ \\
+$\alpha_{\mathrm{FP}}$ 范围 & $0.800/0.800/0.800$ & $0.500/0.500/0.500$ & $0.200/0.200/0.200$ & $0.291/0.460/0.613$ \\
+$r_{\alpha K}$ & -- & -- & -- & $0.942$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+表\ref{tab:ch4_no_rcm_results}显示，强力优先在高刚度段出现明显力峰值和抖动，而力裕度仲裁在保持低力抖动的同时取得接近最佳固定折中点的力误差。随后，表\ref{tab:ch4_with_rcm_results}进一步给出加入远心运动约束后的结果，用于检验动态仲裁是否会破坏长工具通道合规性。
+
+\begin{table}[htbp]
+\centering
+\caption{远心运动约束场景下固定优先级与连续力裕度仲裁结果}
+\label{tab:ch4_with_rcm_results}
+\scriptsize
+\begin{tabular}{lcccc}
+\toprule
+指标 & 强位置优先 & 均衡优先 & 强力优先 & 力裕度仲裁 \\
+\midrule
+力均方根误差/N & $0.1153$ & $0.1470$ & $0.2043$ & $0.1146$ \\
+力峰值误差/N & $0.521$ & $1.151$ & $1.212$ & $0.530$ \\
+力抖动 $J_F$/N & $0.0195$ & $0.0517$ & $0.0889$ & $0.0185$ \\
+位置均方根误差/mm & $0.649$ & $0.685$ & $0.748$ & $0.654$ \\
+$z$ 向抖动 $J_z$/mm & $0.0084$ & $0.0423$ & $0.0832$ & $0.0072$ \\
+远心运动峰值误差/mm & $1.014$ & $1.293$ & $2.069$ & $1.032$ \\
+$\alpha_{\mathrm{FP}}$ 范围 & $0.800/0.800/0.800$ & $0.500/0.500/0.500$ & $0.200/0.200/0.200$ & $0.497/0.778/0.844$ \\
+$r_{\alpha K}$ & $0.097$ & -- & $-0.098$ & $0.711$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+表\ref{tab:ch4_with_rcm_results}说明，在远心运动约束存在时，过低的位置优先级会放大几何约束误差。为了更紧凑地比较两类场景下的关键指标，图\ref{fig:ch4_stiffness_alpha_metrics} 将力误差、位置误差、抖动和约束误差放在同一综合图中展示。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/ch3_ch4/ch4_stiffness_alpha_metrics.png}
+\caption{固定优先级与连续力裕度仲裁的综合指标对比}
+\label{fig:ch4_stiffness_alpha_metrics}
+\end{figure}
+
+图\ref{fig:ch4_stiffness_alpha_metrics}进一步表明，力裕度仲裁并不是简单追求单一力误差最小，而是在力抖动、位置误差和几何约束误差之间保持更均衡的表现。该综合对比为后续分场景时序分析提供了整体背景。
+
+\subsection{无远心运动约束结果}
+\label{subsec:ch4_no_rcm_results}
+
+为了观察无远心运动场景中各方法随时间变化的行为，图\ref{fig:ch4_no_rcm_strategy_timeseries}展示接触力、位置误差、优先级和估计刚度的完整时序响应。该图重点说明固定优先级在刚度切换处的局限，以及力裕度仲裁如何在线移动折中点。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/ch3_ch4/ch4_no_rcm_alpha_strategy_timeseries.png}
+\caption{无远心运动约束场景下接触力、位置误差、力--位优先级和环境刚度的时序对比}
+\label{fig:ch4_no_rcm_strategy_timeseries}
+\end{figure}
+
+从图\ref{fig:ch4_no_rcm_strategy_timeseries}可以看到，固定方法在刚度变化前后只能维持同一个优先级，因此很难同时适应软区和硬区。为了进一步放大观察力裕度仲裁自身的刚度响应，图\ref{fig:ch4_no_rcm_alpha_detail}给出 $\alpha_{\mathrm{FP}}$ 与 $\hat K_e$ 的细节曲线。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/ch3_ch4/ch4_no_rcm_alpha_stiffness_detail.png}
+\caption{无远心运动约束场景下连续力裕度仲裁的 $\alpha_{\mathrm{FP}}$--刚度响应细节}
+\label{fig:ch4_no_rcm_alpha_detail}
+\end{figure}
+
+无远心运动场景中，固定 $\alpha_{\mathrm{FP}}=0.2$ 的结果最能说明低位置优先级的风险。它在软区给力调节留下了足够空间，但进入高刚度段后，工具压入深度的微小变化会被放大为明显力峰值，力峰值误差达到 $2.544\,\mathrm{N}$，力抖动达到 $0.3612\,\mathrm{N}$。这不是简单的参数没调好，而是固定低优先级本身的局限：当环境突然变硬时，它仍然按照软环境的折中方式工作。
+
+固定 $\alpha_{\mathrm{FP}}=0.5$ 在本组无远心运动实验中给出了最低的力均方根误差 $0.1302\,\mathrm{N}$。不过这个结果依赖于预先选定的中等固定值；换一个刚度组合或扫描速度，它未必仍是最优。固定 $\alpha_{\mathrm{FP}}=0.8$ 的位置保持更强，但硬区力偏差更大，力均方根误差为 $0.1440\,\mathrm{N}$。连续力裕度仲裁的力均方根误差为 $0.1336\,\mathrm{N}$，略高于固定 $0.5$，但低于固定 $0.8$，同时取得最低的力抖动 $0.0017\,\mathrm{N}$。这一点很重要。它说明连续仲裁不是为了在某一个单项指标上永远压过手工固定值，而是在未知软硬变化中自动移动折中点，并保持更平稳的接触。
+
+从\cref{fig:ch4_no_rcm_alpha_detail}可以看到，$\alpha_{\mathrm{FP}}$ 与 $\hat K_e$ 呈明显同向变化。软区、中等刚度区和硬区的稳定均值分别约为
+\begin{equation}
+  \bar\alpha_{\mathrm{soft}}=0.29,\quad
+  \bar\alpha_{\mathrm{mid}}=0.51,\quad
+  \bar\alpha_{\mathrm{hard}}=0.61 .
+  \label{eq:ch4_no_rcm_alpha_zone}
+\end{equation}
+优先级--刚度相关系数 $r_{\alpha K}=0.942$。这说明 $\alpha_{\mathrm{FP}}$ 的变化不是随机振荡，也不是单纯由力误差瞬态触发，而是确实由环境刚度估计驱动。低刚度时系统释放 z 向力调节；高刚度时系统提高位置优先级，以避免压入深度变化继续放大接触力。
+
+\subsection{远心运动约束结果}
+\label{subsec:ch4_results_analysis}
+
+为了检验同一策略在长工具约束下是否仍然有效，图\ref{fig:ch4_with_rcm_strategy_timeseries}展示远心运动约束场景下的接触力、位置误差、优先级和刚度时序。该图关注的是动态力--位仲裁是否会牺牲通道合规性。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/ch3_ch4/ch4_with_rcm_alpha_strategy_timeseries.png}
+\caption{远心运动约束场景下接触力、位置误差、力--位优先级和环境刚度的时序对比}
+\label{fig:ch4_with_rcm_strategy_timeseries}
+\end{figure}
+
+图\ref{fig:ch4_with_rcm_strategy_timeseries}显示，远心运动约束会压缩 $\alpha_{\mathrm{FP}}$ 的可调范围，使控制器不允许长时间处于过低位置优先级。为了说明这种约束保护下的刚度响应仍然存在，图\ref{fig:ch4_with_rcm_alpha_detail}给出连续力裕度仲裁的局部细节。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{figures/ch3_ch4/ch4_with_rcm_alpha_stiffness_detail.png}
+\caption{远心运动约束场景下连续力裕度仲裁的 $\alpha_{\mathrm{FP}}$--刚度响应细节}
+\label{fig:ch4_with_rcm_alpha_detail}
+\end{figure}
+
+加入远心运动约束后，控制器同时面对三类误差：接触力误差、扫描位置误差和几何约束误差。此时固定低优先级的劣势更明显。固定 $\alpha_{\mathrm{FP}}=0.2$ 的力均方根误差为 $0.2043\,\mathrm{N}$，远心运动峰值误差达到 $2.069\,\mathrm{mm}$；固定 $\alpha_{\mathrm{FP}}=0.5$ 的力误差和远心运动误差也明显高于固定 $0.8$。这说明在长工具约束下，过度释放 z 向力调节会通过工具姿态和法兰位置耦合放大几何误差。
+
+连续力裕度仲裁在该场景中取得力均方根误差 $0.1146\,\mathrm{N}$，略低于固定 $\alpha_{\mathrm{FP}}=0.8$ 的 $0.1153\,\mathrm{N}$；力抖动 $0.0185\,\mathrm{N}$ 也低于固定 $0.8$ 的 $0.0195\,\mathrm{N}$。位置均方根误差从 $0.649\,\mathrm{mm}$ 小幅变为 $0.654\,\mathrm{mm}$，远心运动峰值误差从 $1.014\,\mathrm{mm}$ 小幅变为 $1.032\,\mathrm{mm}$。也就是说，连续仲裁并没有以明显牺牲几何约束为代价换取力误差降低。它在软区释放一定力控能力，在中高刚度区迅速提高位置和远心运动稳定权重。
+
+远心运动场景中的 $\alpha_{\mathrm{FP}}$ 变化幅度小于无远心运动场景，这是符合预期的。因为远心运动约束要求工具轴线保持通过固定点，$\alpha_{\mathrm{FP}}$ 不能像无约束时那样降得过低。即便如此，从\cref{fig:ch4_with_rcm_alpha_detail}仍可看到刚度响应：软区、中等刚度区和硬区的稳定均值分别约为
+\begin{equation}
+  \bar\alpha_{\mathrm{soft}}=0.58,\quad
+  \bar\alpha_{\mathrm{mid}}=0.83,\quad
+  \bar\alpha_{\mathrm{hard}}=0.84 .
+  \label{eq:ch4_with_rcm_alpha_zone}
+\end{equation}
+优先级--刚度相关系数 $r_{\alpha K}=0.711$。该结果说明，刚度敏感项在远心运动约束保护下仍然有效，只是其调节范围受到几何安全边界约束。
+
+\subsection{综合讨论}
+\label{subsec:ch4_sim_discussion}
+
+最后，为了把无远心运动和远心运动两类场景中的优先级变化放到同一尺度下比较，图\ref{fig:ch4_zone_alpha_means}统计不同刚度区间内的 $\alpha_{\mathrm{FP}}$ 均值。
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/ch3_ch4/ch4_zone_alpha_means.png}
+\caption{不同刚度区间内固定优先级与连续力裕度仲裁的 $\alpha_{\mathrm{FP}}$ 均值对比}
+\label{fig:ch4_zone_alpha_means}
+\end{figure}
+
+从\cref{fig:ch4_zone_alpha_means}可以更直观看到固定优先级和连续优先级的区别。固定策略在所有刚度区都保持同一个 $\alpha_{\mathrm{FP}}$，因此它只能表达一个全局折中点。连续力裕度仲裁则让 $\alpha_{\mathrm{FP}}$ 随刚度区移动：低刚度时偏力调节，高刚度时偏位置和几何约束稳定。这与前文\eqref{eq:ch4_gK}--\eqref{eq:ch4_alpha_r}的设计目标一致。
+
+这一结果也说明第四章与第三章的验证重点不同。第三章结果说明，合作博弈控制和模糊自适应仲裁能够降低刚性几何约束任务中的远心运动误差和末端跟踪误差；但第三章实验的主要风险来自人机意图切换和障碍接近，并未把持续接触力作为状态反馈目标。第四章在此基础上加入接触力误差、泄漏积分、环境刚度估计和力安全边界，使仲裁变量从人机角色分配扩展到力--位任务分配。换句话说，第三章回答“人在不同时刻应占多少控制权”，第四章进一步回答“接触任务中位置和力在不同时刻应各占多少优先级”。两者不是替代关系，而是递进关系。
+
+综合来看，连续力裕度仲裁的优势不是简单地让某一个误差指标永远最小。更准确地说，它避免了固定优先级对环境刚度的盲目性：当刚度变化时，控制器可以利用 $\hat K_e$ 自动移动力--位折中点；当远心运动误差接近软边界时，控制器又会通过下限保护避免过度释放位置权重。这样的策略更接近实际柔性接触任务的需要，也更适合后续迁移到真实柔性环境。
+
+\section{本章小结}
+\label{sec:ch4_summary}
+
+本章针对柔性接触恒力扫描任务，提出了一种交互力安全裕度驱动的折扣帕累托力--位协同控制方法。首先，从修正阻抗动力学和开尔文--沃伊特局部接触模型出发，构造了包含位置误差、速度误差、力误差和力误差泄漏积分的增广状态，并将真实系统表示为含残差项的非线性增广误差系统。随后，本章结合表观刚度低通估计和有界递推最小二乘阻尼估计，给出了用于增益调度的环境参数在线估计方法。在此基础上，本章先在折扣型位置目标和力目标代价函数下建模并求解帕累托博弈控制器，再描述交互力安全裕度驱动的动态仲裁方案。离线求解、在线查表和显式反馈的结构满足实时接触控制需求。
+
+在仲裁机制方面，本章将接触力相对于上下安全边界的归一化裕度作为核心风险指标，设计了动态力--位优先级 $\alpha_{\mathrm{FP}}(t)$。该参数不同于第三章的人机仲裁参数，其作用是在位置跟踪和力调节之间进行任务级权衡。进一步地，仿真实现采用逐轴优先级形式，使 $x/y$ 方向保持严格位置跟踪，仅在 $z$ 向压入深度上进行力--位仲裁；同时利用估计刚度 $\hat K_e$ 构造刚度响应项，使 $\alpha_{\mathrm{FP}}$ 在软环境和硬环境中具有不同稳态值。理论分析表明，在标称模型下，折扣帕累托控制律具有明确的最优性；在存在残差扰动时，真实性能相对标称性能的偏差可由残差界刻画；在环境刚度和阻尼建模不准确时，黎卡提解、反馈增益和最优控制输入相对真实最优解的误差均具有有界性。
+
+仿真结果表明，在无远心运动约束场景中，连续力裕度仲裁的 $\alpha_{\mathrm{FP}}$ 与 $\hat K_e$ 呈显著相关，能够在低刚度区降低位置优先级、在高刚度区提高位置优先级，并避免固定低优先级在硬接触区产生的大幅力振荡。在远心运动约束场景中，该策略在基本保持远心运动误差水平的同时，取得低于固定高优先级基线的力均方根误差和力抖动。由此可见，刚度敏感的连续力--位仲裁能够比固定优先级更自然地适应柔性接触扫描中的软硬变化。
+
+至此，第三章和第四章形成递进关系。第三章解决刚性约束任务中的人机意图仲裁与共享控制问题，第四章进一步处理柔性连续接触中的力--位协调和模型不确定性问题。二者共同构成面向约束操作和接触交互任务的分层合作博弈控制方法基础。

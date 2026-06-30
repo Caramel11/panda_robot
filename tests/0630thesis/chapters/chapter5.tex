@@ -1,0 +1,866 @@
+% !TeX root = ../main.tex
+\chapter{面向工业约束接触任务的双仲裁合作博弈控制方法}
+\label{chap:dual_arbitration_industrial_contact}
+
+第三章研究了刚性几何约束任务中的人机意图仲裁问题。共享控制与轨迹变形方法为这类人类监督输入建模提供了重要思路\cite{dragan2013policy,losey2018trajectory,franceschi2023role}。该类问题的关键在于，当机器人已经具有自主任务目标时，如何从操作者输入中识别出真正有效的监督意图，并把这种意图转化为对期望轨迹或共享目标的调整。第四章进一步研究了柔性接触任务中的力--位协同控制问题。该类问题关注的是，在机器人末端与柔性环境持续接触时，如何根据接触力的安全状态，动态调整位置跟踪和接触力调节之间的优先级。两章方法分别解决了工业人机交互中的两个基本矛盾：一方面，现场操作者希望根据视觉观察、工艺经验或突发情况修正机器人轨迹；另一方面，机器人在接触执行过程中必须守住接触力边界，避免工件损伤、工具磨损、接触丢失或几何约束破坏。
+
+在真实工业现场，这两个矛盾往往不是分开出现的。例如，在柔性密封条检测、复合材料壳体打磨、橡胶件表面扫描、曲面零件抛光以及接触式边缘跟随等任务中，机器人通常按照离线规划或示教轨迹运动；操作者则会根据工件表面缺陷、余量分布、局部变形或工艺判断给出在线修正。这个修正通常是有价值的。问题在于，人的输入并不总是安全的。一个横向修正可能帮助机器人绕开缺陷区域，而一个不经意的法向压入却可能直接把接触力推向上界。反过来，如果控制系统过度保守，完全压制人的输入，那么共享控制也就失去了意义。因此，第五章需要回答的问题不是简单地“是否接受人类输入”，也不是简单地“是否优先力控”，而是：在工业约束接触任务中，如何让人能够影响机器人期望轨迹，同时又不绕过接触安全边界。
+
+本章提出一种面向工业约束接触任务的双仲裁合作博弈控制方法。其基本思路很直接：人机仲裁参数 $\alpha_{\mathrm{HR}}(t)$ 只作用于参考轨迹生成层，用于描述操作者输入对期望轨迹的影响程度；力--位优先级 $\alpha_{\mathrm{FP}}(t)$ 只作用于执行控制层，用于描述控制器当前更重视轨迹跟踪还是接触力调节。换句话说，$\alpha_{\mathrm{HR}}$ 回答“人对轨迹有多大影响”，$\alpha_{\mathrm{FP}}$ 回答“执行时更偏位置还是偏力”。这种分层结构使第三章的人机共享控制和第四章的柔性接触力--位协同控制能够自然衔接，同时避免把两个物理含义不同的仲裁量混为一个控制权重。
+
+\section{问题描述与建模}
+\label{sec:ch5_problem_modeling}
+
+本章考虑的人机交互对象是一类通用工业约束接触任务。典型场景如下：一台七自由度机械臂携带接触工具，在柔性或半柔性工件表面执行扫描、打磨、检测或边缘跟随。工件可能是橡胶、泡棉、复合材料板、柔性密封件，也可能是具有局部刚度差异的曲面零件。机器人自主参考轨迹由工艺文件、离线规划器或示教路径给出；操作者则通过主端设备、手柄、力引导装置或速度命令在线修正轨迹。若任务还存在导向孔、夹具通道、固定点--轴线约束或类似远心运动的通道约束，机器人还必须保持工具轴线与约束通道之间的几何合规。
+
+设机械臂关节位置和速度分别为 $q,\dot q\in\R^{n_q}$，任务空间接触点位置为 $x(t)\in\R^3$。若存在固定通道或固定点--轴线约束，记约束点为 $p_c\in\R^3$，工具轴线为 $\ell(t)$。几何约束误差定义为
+\begin{equation}
+  e_{\mathrm{gc}}(t)=\dist\bigl(p_c,\ell(t)\bigr),
+  \label{eq:ch5_gc_error}
+\end{equation}
+其中 $\dist(\cdot,\cdot)$ 表示点到直线的欧氏距离。该指标越小，说明工具越接近理想通道运动。对于没有显式通道约束的普通表面接触任务，可令 $e_{\mathrm{gc}}(t)=0$，本章方法相应退化为一般笛卡尔接触控制框架。
+
+机器人自主参考轨迹记为
+\begin{equation}
+  x_r(t)\in\R^3,
+  \label{eq:ch5_autonomous_ref}
+\end{equation}
+它表示机器人在没有人类干预时希望执行的名义路径。操作者输入记为
+\begin{equation}
+  s_h(t)=\{\Delta x_m(t),\dot x_m(t),f_h(t)\},
+  \label{eq:ch5_human_signal}
+\end{equation}
+其中 $\Delta x_m(t)$ 为主端位移增量，$\dot x_m(t)$ 为主端速度，$f_h(t)$ 为操作者交互力或等效输入强度。这里需要特别说明：本章并不把 $s_h(t)$ 直接作为从端机器人的底层控制命令。人的输入先被解释为对期望轨迹的监督修正，再经过意图判断、平滑滤波和接触安全投影后，才进入执行层。这样做可以避免手部抖动、短时误触或不安全法向输入被直接放大到接触工具上。
+
+设环境作用于工具的接触力为 $f_e(t)\in\R^3$，受控法向接触力标量为
+\begin{equation}
+  y_f(t)=S_f f_e(t),
+  \label{eq:ch5_yf_def}
+\end{equation}
+其中 $S_f\in\R^{1\times3}$ 为力方向选择矩阵。若传感器坐标系与任务坐标系方向相反，$S_f$ 中应同时包含符号修正，使 $y_f(t)>0$ 表示工具对工件的压入力。给定期望接触力 $F_d$ 和安全力区间 $[F_{\min},F_{\max}]$，满足
+\begin{equation}
+  F_{\min}<F_d<F_{\max}.
+  \label{eq:ch5_force_order}
+\end{equation}
+其中 $F_{\min}$ 不是简单的零力阈值，而是维持稳定接触、保证检测或打磨效果所需的最小有效接触力；$F_{\max}$ 则由工件材料、表面质量要求、工具耐受能力和安全裕度共同决定。控制过程中希望
+\begin{equation}
+  F_{\min}\le y_f(t)\le F_{\max}.
+  \label{eq:ch5_force_bound}
+\end{equation}
+当 $y_f<F_{\min}$ 时，机器人可能已经接触不足，检测信号会失真，打磨材料去除量也会不足；当 $y_f>F_{\max}$ 时，则可能出现表面压痕、工具冲击或关节力矩突增。因此，式\eqref{eq:ch5_force_bound} 是本章任务的核心安全约束。
+
+柔性接触环境采用局部 Kelvin--Voigt 模型描述，并与阻抗控制思想共同构成接触任务的基本建模基础\cite{hogan1985impedance}。设接触法向压入量为 $\delta(t)$，压入速度为 $\dot\delta(t)$，则受控力可近似为
+\begin{equation}
+  y_f(t)=K_e\delta(t)+B_e\dot\delta(t)+\nu_f(t),
+  \label{eq:ch5_kv_scalar}
+\end{equation}
+其中 $K_e$ 为局部等效刚度，$B_e$ 为局部等效阻尼，$\nu_f(t)$ 表示测量噪声和模型误差。对于分段变刚度工件，$K_e$ 与 $B_e$ 会随扫描位置变化；对于真实柔性工件，它们只能理解为当前工作点附近的表观参数，而不是全局精确模型。控制器在线使用环境估计器给出的 $\hat K_e(t)$ 进行增益调度，但接触安全仲裁直接依赖实时接触力 $y_f(t)$。这样可以避免把“环境硬”误解为“当前一定危险”，也避免在低刚度但大压入的情况下低估风险。
+
+\begin{definition}[工业约束接触任务]
+\label{def:ch5_task}
+工业约束接触任务是指机器人末端工具在柔性或半柔性环境表面执行接触式操作，并同时受到人类监督输入、接触力安全约束和可选几何约束影响的一类任务。其主要变量包括机器人自主参考 $x_r(t)$、操作者输入 $s_h(t)$、受控接触力 $y_f(t)$、安全力范围 $[F_{\min},F_{\max}]$、环境估计参数 $\hat K_e(t)$ 以及几何约束误差 $e_{\mathrm{gc}}(t)$。工业中的柔性表面扫描、人工监督打磨、接触式检测、抛光和边缘跟随均可看作该任务的具体实例。
+\end{definition}
+
+\begin{problem}[双仲裁合作控制问题]
+\label{prob:ch5_dual_arbitration}
+给定机器人任务空间模型、机器人自主参考 $x_r(t)$、操作者输入 $s_h(t)$、接触力反馈 $y_f(t)$、力安全区间 $[F_{\min},F_{\max}]$、环境刚度估计 $\hat K_e(t)$ 以及可选几何约束，设计人机仲裁参数 $\alpha_{\mathrm{HR}}(t)$、力--位优先级 $\alpha_{\mathrm{FP}}(t)$ 和任务空间控制输入 $u(t)$，使闭环系统满足以下要求：
+\begin{enumerate}[label=(\arabic*)]
+  \item 操作者持续、明确且安全的轨迹修正能够平滑影响最终期望轨迹；
+  \item 短时扰动、不连续抖动以及可能导致接触力越界的人类输入不会被直接放大到从端执行；
+  \item 位置误差、速度误差、接触力误差、力误差积分状态和几何约束误差保持有界；
+  \item 接触力尽可能维持在 $[F_{\min},F_{\max}]$ 内，并在接近边界时提高力调节优先级；
+  \item 在线计算满足固定控制周期下的实时执行要求。
+\end{enumerate}
+\end{problem}
+
+\begin{assumption}[任务空间正则性]
+\label{ass:ch5_robot_regular}
+在本文考虑的工业接触工作区间内，机械臂避开运动学奇异区域，任务空间雅可比矩阵 $J(q)$ 及其所需子矩阵有界且连续。机器人底层伺服、重力补偿和关节限幅正常工作，使得任务空间控制输入能够通过雅可比转置或等效任务空间接口映射到关节空间。
+\end{assumption}
+
+\begin{assumption}[人类输入与参考轨迹]
+\label{ass:ch5_human_ref}
+机器人自主参考 $x_r(t)$、人侧参考 $x_h(t)$ 以及由二者融合得到的期望轨迹在实验工作区间内有界，并且一阶导数分段连续。操作者输入 $s_h(t)$ 有界，短时冲击或抖动可通过滤波和限幅处理为有界信号。
+\end{assumption}
+
+\begin{assumption}[局部接触模型与残差项]
+\label{ass:ch5_contact_residual}
+在每个短时间接触区间内，柔性环境可由式\eqref{eq:ch5_kv_scalar} 局部近似。由接触模型误差、环境参数变化、传感器噪声、参考轨迹变化、内环补偿误差、离散化误差和几何映射误差引起的未建模项可统一记为残差 $d_I(\xi_I,t)$。存在非负常数 $\bar d_0,\bar d_1$，使得
+\begin{equation}
+  \norm{d_I(\xi_I,t)}\le \bar d_0+\bar d_1\norm{\xi_I}
+  \label{eq:ch5_residual_bound}
+\end{equation}
+在所考虑紧集内成立。
+\end{assumption}
+
+至此可以看出，本章不是简单叠加第三章和第四章。第三章中的 $\alpha_{\mathrm{HR}}$ 与 $\beta$ 被保留在参考轨迹生成层；第四章中的 $\alpha_{\mathrm{FP}}$、$\rho_F$、$\hat K_e$ 和力--位增广模型被保留在执行控制层。为了避免控制器维度无谓增加，本章不建立关于 $(\alpha_{\mathrm{HR}},\alpha_{\mathrm{FP}},\hat K_e)$ 的三维增益表，而采用“参考层融合、执行层调度”的降维结构。
+
+\section{双仲裁合作控制策略设计}
+\label{sec:ch5_strategy}
+
+本节给出完整控制策略。首先，操作者输入被转化为经过安全投影的人影响期望轨迹；随后，接触力安全裕度用于生成力--位优先级；最后，在力--位增广状态下构造合作博弈反馈律，并通过工业约束通道映射为机器人执行命令。为了保持与前文理论推导一致，下面用文字说明每个控制周期内的执行流程。
+
+在参考层，系统先将主端输入映射为直接遥操作参考 $x_{\mathrm{tele}}$，并根据干预强度、持续时间和方向一致性更新参考层融合系数 $\beta$。由此得到候选人侧参考 $x_h=\beta x_{\mathrm{tele}}+(1-\beta)x_r$，同时根据人类输入特征计算人机仲裁参数 $\alpha_{\mathrm{HR}}$。接着，局部力预测模型用于判断 $x_h$ 是否可能使接触力越过安全边界。若存在越界风险，则将 $x_h$ 投影到安全参考集合，得到 $x_h^{\mathrm{safe}}$；若不存在越界风险，则保留该人侧参考。最后，系统将自主参考和安全人侧参考融合，得到人影响期望轨迹 $x_d^I$。
+
+在执行层，控制器根据实时接触力计算力安全裕度 $\rho_F$，并结合环境刚度估计 $\hat K_e$ 和阶段先验更新力--位优先级 $\alpha_{\mathrm{FP}}$。随后，系统构造工业接触增广状态 $\xi_I$，从离线增益表中得到 $K(\alpha_{\mathrm{FP}},\hat K_e)$，并计算合作博弈反馈 $u=-K(\alpha_{\mathrm{FP}},\hat K_e)\xi_I$。若任务存在通道约束或远心运动约束，$x_d^I$ 还需映射为法兰参考，并经过姿态对齐、关节力矩限幅和硬安全监督后再输出给机器人。实验记录中，人类修正接受率、危险输入抑制率、力越界时间和轨迹误差分别用于评价参考层和执行层的作用。
+
+由此可见，双仲裁并不是把两类权重简单相乘。$\alpha_{\mathrm{HR}}$ 只决定安全人侧参考对期望轨迹的影响，$\alpha_{\mathrm{FP}}$ 只决定执行反馈中位置目标和力目标的相对优先级。参考层先保证人的输入不会绕过接触安全边界，执行层再根据实时力裕度和环境刚度选择合适的反馈增益。
+
+\subsection{人影响参考轨迹生成}
+\label{subsec:ch5_reference_generation}
+
+人类输入首先被转化为直接遥操作参考。设 $K_m\succ0$ 为主从比例矩阵，则
+\begin{equation}
+  x_{\mathrm{tele}}(t)=x(t)+K_m\Delta x_m(t).
+  \label{eq:ch5_tele_ref}
+\end{equation}
+式\eqref{eq:ch5_tele_ref} 的物理含义很简单：操作者在主端给出一个位移增量，系统将其按比例映射为从端接触点附近的期望修正。然而，直接遥操作参考不能直接进入底层控制器，因为它可能包含抖动、延迟、误触，甚至与当前接触力边界相冲突。
+
+因此，本章先构造人侧监督参考
+\begin{equation}
+  x_h(t)=\beta(t)x_{\mathrm{tele}}(t)+\bigl(1-\beta(t)\bigr)x_r(t),
+  \label{eq:ch5_human_ref}
+\end{equation}
+其中 $\beta(t)\in[0,1]$ 为参考层融合系数。$\beta$ 越小，人侧参考越接近机器人自主轨迹；$\beta$ 越大，人侧参考越接近直接遥操作参考。它主要用于抑制短时扰动，并让人类修正以平滑方式进入参考生成过程。该处理与第三章的监督参考思想一致，但这里更强调接触任务中的安全过滤。
+
+为了判断操作者输入是否代表有效意图，定义归一化人类干预强度
+\begin{equation}
+  I_h(t)=\sat\left(\frac{\norm{f_h(t)}}{F_h^{\max}},0,1\right),
+  \label{eq:ch5_Ih}
+\end{equation}
+干预持续时间
+\begin{equation}
+  T_h(t)=\sat\left(\frac{t_{\mathrm{hold}}(t)}{T_{\max}},0,1\right),
+  \label{eq:ch5_Th}
+\end{equation}
+以及人类输入方向与机器人自主运动方向的一致性
+\begin{equation}
+  C_h(t)=\frac{v_h^{\T}(t)v_r(t)}{\norm{v_h(t)}\norm{v_r(t)}+\varepsilon_c}.
+  \label{eq:ch5_Ch}
+\end{equation}
+其中 $v_h$ 为主端输入对应的期望运动方向，$v_r=\dot x_r$ 为自主参考速度，$\varepsilon_c>0$ 用于避免分母为零。$C_h>0$ 表示人的输入大体沿自主路径方向，$C_h<0$ 表示人希望反向或明显偏离当前路径，$C_h\approx0$ 则多对应横向局部修正。在打磨或检测任务中，横向修正常常是有意义的，因为操作者可能发现机器人名义路径没有覆盖缺陷区域；而法向修正则需要格外谨慎，因为它直接影响接触力。
+
+人机仲裁器采用特征映射
+\begin{equation}
+  \alpha_{\mathrm{HR},0}(t)
+  =\mathcal F_{\mathrm{HR}}\bigl(I_h(t),T_h(t),C_h(t),R_s(t)\bigr),
+  \label{eq:ch5_alpha_hr_raw}
+\end{equation}
+其中 $R_s(t)$ 表示空间风险或任务上下文特征，例如工具到工件边缘的距离、到禁入区域的距离、几何约束误差裕度等。$\mathcal F_{\mathrm{HR}}$ 可以沿用第三章的双通道模糊仲裁和滤波结构，也可以由具有相同输入输出含义的平滑映射实现。最终人机仲裁参数通过一阶滤波生成：
+\begin{equation}
+  \dot\alpha_{\mathrm{HR}}(t)=
+  \lambda_{\mathrm{HR}}\bigl(\alpha_{\mathrm{HR},0}(t)-\alpha_{\mathrm{HR}}(t)\bigr),
+  \quad \lambda_{\mathrm{HR}}>0.
+  \label{eq:ch5_alpha_hr_filter}
+\end{equation}
+这里 $\lambda_{\mathrm{HR}}$ 控制权重响应速度。取值过大时，系统容易跟随手部抖动；取值过小时，操作者会感觉机器人“不听指挥”。因此，它不是单纯的数学参数，而是人机交互手感和闭环平滑性之间的折中。
+
+接下来引入本章相较第三章的关键改进：接触安全参考投影。人的参考并不直接参与最终融合，而是先被投影到安全集合。定义局部接触力预测模型
+\begin{equation}
+  \hat F(\bar x;t)=y_f(t)+\hat K_e(t)n_c^{\T}(t)\bigl(\bar x-x(t)\bigr),
+  \label{eq:ch5_force_prediction}
+\end{equation}
+其中 $n_c(t)$ 为指向压入方向的接触法向，$\hat K_e(t)$ 为当前表观刚度估计。式\eqref{eq:ch5_force_prediction} 是一个一阶近似：若候选参考 $\bar x$ 沿压入方向移动，则预测接触力增加；若沿卸载方向移动，则预测接触力降低。在小步长、高频控制条件下，该近似足以用于参考层安全筛选。
+
+定义安全参考集合
+\begin{equation}
+  \mathcal X_s(t)=
+  \left\{\bar x\in\mathcal X_{\mathrm{ws}}\middle|
+  \begin{array}{l}
+    F_{\min}+\Delta_F\le \hat F(\bar x;t)\le F_{\max}-\Delta_F,\\
+    e_{\mathrm{gc}}(\bar x)\le e_{\mathrm{gc}}^{\max}
+  \end{array}
+  \right\},
+  \label{eq:ch5_safe_set}
+\end{equation}
+其中 $\mathcal X_{\mathrm{ws}}$ 为任务工作空间，$\Delta_F>0$ 为安全余量。该余量的作用是预留传感器噪声、刚度估计误差和离散控制延迟的空间。人侧安全参考定义为
+\begin{equation}
+  x_h^{\mathrm{safe}}(t)=
+  \argmin_{\bar x\in\mathcal X_s(t)}\norm{\bar x-x_h(t)}^2.
+  \label{eq:ch5_safe_projection}
+\end{equation}
+直观地看，式\eqref{eq:ch5_safe_projection} 选择的是“离操作者想法最近、但仍然安全”的参考点。若 $x_h(t)$ 本身安全，则投影几乎不起作用；若 $x_h(t)$ 会导致法向过压，投影会主要削弱其法向分量，而尽量保留切向修正。
+
+最终人影响后的期望轨迹为
+\begin{equation}
+  x_d^I(t)=
+  \alpha_{\mathrm{HR}}(t)x_h^{\mathrm{safe}}(t)+
+  \bigl(1-\alpha_{\mathrm{HR}}(t)\bigr)x_r(t).
+  \label{eq:ch5_intent_ref_basic}
+\end{equation}
+在表面扫描和打磨任务中，还可以进一步区分切向修正和法向修正。定义
+\begin{equation}
+  P_N(t)=n_c(t)n_c^{\T}(t),
+  \quad
+  P_T(t)=I-P_N(t),
+  \label{eq:ch5_projection_matrices_ref}
+\end{equation}
+其中 $P_N$ 为法向投影矩阵，$P_T$ 为切向投影矩阵。增强型参考融合写为
+\begin{equation}
+  x_d^I=x_r+
+  \alpha_{\mathrm{HR}}P_T\bigl(x_h^{\mathrm{safe}}-x_r\bigr)+
+  \alpha_{\mathrm{HR}}\kappa_N P_N\bigl(x_h^{\mathrm{safe}}-x_r\bigr),
+  \label{eq:ch5_tangent_normal_ref}
+\end{equation}
+其中 $\kappa_N\in[0,1]$ 为法向人类输入抑制系数。实际实现中可取 $\kappa_N=\rho_F$ 或 $\kappa_N=\sat(\rho_F,\kappa_{\min},1)$。这样，接触力越接近边界，人的法向输入越难直接改变执行参考；而切向修正仍然可以被保留。这一点对工业任务很重要，因为很多时候操作者真正想改的是扫描路径，而不是压得更深。
+
+\subsection{接触安全优先级仲裁}
+\label{subsec:ch5_force_position_arbitration}
+
+执行层的仲裁变量为 $\alpha_{\mathrm{FP}}(t)$。它不决定是否接受人类意图，而决定当前控制器在位置目标和力目标之间如何分配优先级。根据式\eqref{eq:ch5_force_bound}，定义接触力到安全下界和上界的距离
+\begin{equation}
+  d_{\mathrm{lower}}(t)=y_f(t)-F_{\min},
+  \quad
+  d_{\mathrm{upper}}(t)=F_{\max}-y_f(t).
+  \label{eq:ch5_force_distances}
+\end{equation}
+二者分别表示当前接触力距离“脱离接触风险”和“过压风险”还有多远。进一步定义归一化力安全裕度
+\begin{equation}
+  \rho_F(t)=\sat\left(
+  \frac{\min\{d_{\mathrm{lower}}(t),d_{\mathrm{upper}}(t)\}}
+  {(F_{\max}-F_{\min})/2},0,1
+  \right).
+  \label{eq:ch5_rhoF}
+\end{equation}
+当 $\rho_F\approx1$ 时，接触力位于安全区间中部；当 $\rho_F\approx0$ 时，接触力已经接近某一边界。仅有 $\rho_F$ 还不够，因为接近上界和接近下界的物理含义不同。为此定义边界方向变量
+\begin{equation}
+  s_F(t)=\sat\left(
+  \frac{y_f(t)-F_d}{(F_{\max}-F_{\min})/2},-1,1
+  \right).
+  \label{eq:ch5_sF}
+\end{equation}
+其中 $s_F>0$ 表示接触力偏大，应考虑卸载；$s_F<0$ 表示接触力偏小，应恢复接触。
+
+在局部接触坐标系中，切向轨迹误差和法向位置误差分别为
+\begin{equation}
+  e_T=P_T(x-x_d^I),
+  \quad
+  e_N=P_N(x-x_d^I),
+  \label{eq:ch5_tangent_normal_errors}
+\end{equation}
+接触力误差为
+\begin{equation}
+  e_f=y_f-F_d.
+  \label{eq:ch5_force_error}
+\end{equation}
+这里的建模选择具有明确的工程含义：切向误差主要影响扫描覆盖、加工轨迹和检测路径；法向误差和接触力误差则主要影响接触稳定性和工件安全。若把三个方向完全等同处理，控制器容易在“跟踪轨迹”和“保护接触力”之间来回摇摆，尤其在曲面或变刚度工件上更明显。
+
+定义归一化力误差和切向轨迹误差
+\begin{equation}
+  r_f(t)=\frac{|e_f(t)|}{\varepsilon_f},
+  \quad
+  r_T(t)=\frac{\norm{e_T(t)}}{\varepsilon_T},
+  \label{eq:ch5_rf_rT}
+\end{equation}
+其中 $\varepsilon_f$ 为允许力误差尺度，$\varepsilon_T$ 为允许切向误差尺度。基础力--位优先级由
+\begin{equation}
+  \alpha_{\mathrm{FP},0}(t)=
+  \mathcal F_{\mathrm{FP}}\bigl(r_f(t),\rho_F(t),r_T(t)\bigr)
+  \label{eq:ch5_alpha_fp_raw}
+\end{equation}
+给出。映射 $\mathcal F_{\mathrm{FP}}$ 可采用第四章的模糊推理结构。一般来说，当接触力处于安全区间中部且切向误差较大时，应增大 $\alpha_{\mathrm{FP},0}$，让机器人优先恢复扫描路径；当接触力误差较大或接触力接近安全边界时，应降低 $\alpha_{\mathrm{FP},0}$，增强法向力调节能力。
+
+为了进一步强调接触力边界，定义风险强度
+\begin{equation}
+  r_F(t)=1-\rho_F(t),
+  \label{eq:ch5_force_risk}
+\end{equation}
+并进行安全修正：
+\begin{equation}
+  \alpha_{\mathrm{safe}}(t)=
+  \alpha_{\mathrm{FP},0}(t)
+  -k_{\mathrm{upper}}r_F(t)\max\{s_F(t),0\}
+  -k_{\mathrm{lower}}r_F(t)\max\{-s_F(t),0\},
+  \label{eq:ch5_alpha_safe}
+\end{equation}
+其中 $k_{\mathrm{upper}}>0$ 和 $k_{\mathrm{lower}}>0$ 分别为靠近上界和下界时的修正强度。式\eqref{eq:ch5_alpha_safe} 的符号值得注意：无论是接触力偏大还是偏小，只要接近边界，系统都降低位置优先级并增强力调节。偏大时需要卸载，偏小时需要恢复接触，两者都不适合继续盲目推进轨迹。
+
+经过限幅和一阶滤波后得到最终力--位优先级：
+\begin{equation}
+  \alpha_{\mathrm{FP},r}(t)=
+  \sat\bigl(\alpha_{\mathrm{safe}}(t),\alpha_{\min},\alpha_{\max}\bigr),
+  \label{eq:ch5_alpha_fp_ref}
+\end{equation}
+\begin{equation}
+  \dot\alpha_{\mathrm{FP}}(t)=
+  \lambda_{\mathrm{FP}}\bigl(\alpha_{\mathrm{FP},r}(t)-\alpha_{\mathrm{FP}}(t)\bigr),
+  \quad \lambda_{\mathrm{FP}}>0.
+  \label{eq:ch5_alpha_fp_filter}
+\end{equation}
+$\lambda_{\mathrm{FP}}$ 越大，控制器对接触力风险响应越快；但过快也可能导致力矩和接触力振荡。因此，该参数需要结合控制周期、力传感器噪声和环境刚度范围共同选择。
+
+\begin{table}[htbp]
+  \centering
+  \caption{力--位优先级的典型仲裁规则}
+  \label{tab:ch5_fp_rules}
+  \begin{tabular}{llll}
+    \toprule
+    接触状态 & 轨迹状态 & 仲裁趋势 & 控制含义 \\
+    \midrule
+    $\rho_F$ 高、$r_T$ 大 & 切向偏差明显 & $\alpha_{\mathrm{FP}}$ 增大 & 优先恢复扫描路径 \\
+    $\rho_F$ 低、$s_F>0$ & 力接近上界 & $\alpha_{\mathrm{FP}}$ 减小 & 增强卸载和力调节 \\
+    $\rho_F$ 低、$s_F<0$ & 力接近下界 & $\alpha_{\mathrm{FP}}$ 减小 & 恢复接触、防止脱离 \\
+    $r_f$ 小、$r_T$ 小 & 力位均稳定 & 平滑保持 & 减少权重抖振 \\
+    \bottomrule
+\end{tabular}
+\end{table}
+
+表\ref{tab:ch5_fp_rules}从工程角度概括了力--位优先级的典型变化趋势。该表说明 $\alpha_{\mathrm{FP}}$ 并不是抽象数学权重，而是根据当前接触是否安全、切向轨迹是否偏离以及力误差方向共同决定的执行层优先级。
+
+\subsection{合作博弈反馈律与约束执行}
+\label{subsec:ch5_game_controller_execution}
+
+在得到人影响后的期望轨迹 $x_d^I$ 后，定义位置、速度和力误差为
+\begin{equation}
+  e_p=x-x_d^I,
+  \quad
+  e_v=\dot x-\dot x_d^I,
+  \quad
+  e_f=y_f-F_d.
+  \label{eq:ch5_errors}
+\end{equation}
+力误差泄漏积分状态为
+\begin{equation}
+  \dot\sigma_f=e_f-\lambda_f\sigma_f,
+  \quad \lambda_f>0.
+  \label{eq:ch5_sigma_f}
+\end{equation}
+泄漏项 $-\lambda_f\sigma_f$ 的作用是抑制长时间积分累积。它保留了积分对稳态力偏差的修正能力，又避免在接触丢失或传感器漂移时发生明显积分饱和。
+
+为体现工业接触中切向轨迹和法向力控的差异，本章在局部接触坐标系下构造增广状态
+\begin{equation}
+  \xi_I=
+  \begin{bmatrix}
+    e_T^{\T} & \dot e_T^{\T} & e_N & \dot e_N & e_f & \sigma_f
+  \end{bmatrix}^{\T}
+  \in\R^{8},
+  \label{eq:ch5_xiI}
+\end{equation}
+其中 $e_T\in\R^2$ 为切向位置误差，$e_N\in\R$ 为法向位置误差。若任务无需显式切向--法向分解，也可等价使用第四章的增广状态 $[e_p^{\T},e_v^{\T},e_f,\sigma_f]^{\T}$。
+
+切向两个通道采用位置--速度二阶局部模型。为避免把状态方程和矩阵定义混在同一个大括号表达中，先写出系统状态方程：
+\begin{equation}
+  \dot z_{T,j}=A_Tz_{T,j}+b_Tu_{T,j}+d_{T,j},
+  \quad j=1,2.
+  \label{eq:ch5_tangent_model}
+\end{equation}
+其中状态、系统矩阵和输入矩阵依次定义为
+\begin{equation}
+  z_{T,j}=
+  \begin{bmatrix}e_{T,j}\\\dot e_{T,j}\end{bmatrix},
+  \quad
+  A_T=
+  \begin{bmatrix}
+    0&1\\
+    -K_v/M&-C/M
+  \end{bmatrix},
+  \quad
+  b_T=
+  \begin{bmatrix}
+    0\\
+    1/M
+  \end{bmatrix}.
+  \label{eq:ch5_tangent_matrices}
+\end{equation}
+其中 $M$、$C$ 和 $K_v$ 分别为等效惯性、阻尼和基线虚拟刚度。切向方向不直接引入力误差，因为切向主要承担路径覆盖和加工推进任务。
+
+法向力--位通道沿用第四章的四维增广模型。令 $z_N=[e_N,\dot e_N,e_f,\sigma_f]^{\T}$，则
+\begin{equation}
+  \dot z_N=A_Nz_N+b_Nu_N+d_N,
+  \label{eq:ch5_normal_model}
+\end{equation}
+其中
+\begin{equation}
+  A_N=\begin{bmatrix}
+  0&1&0&0\\
+  -K_v/M&-C/M&1/M&0\\
+  B_eK_v/M&-K_e+B_eC/M&-B_e/M&0\\
+  0&0&1&-\lambda_f
+  \end{bmatrix},
+  \quad
+  b_N=\begin{bmatrix}0\\1/M\\-B_e/M\\0\end{bmatrix}.
+  \label{eq:ch5_normal_matrices}
+\end{equation}
+矩阵 $A_N$ 的前两行描述法向位置和速度误差动态；第三行描述接触力误差随法向运动和控制输入变化的关系；第四行为力误差泄漏积分动态。由此可得整体局部模型
+\begin{equation}
+  \dot\xi_I=A_c\xi_I+B_cu_c+d_I(\xi_I,t),
+  \label{eq:ch5_augmented_dynamics}
+\end{equation}
+其中 $u_c=[u_{T,1},u_{T,2},u_N]^{\T}$ 为局部接触坐标系下的任务空间输入，$A_c$ 和 $B_c$ 由 $A_T,b_T,A_N,b_N$ 按块对角方式组合得到。
+
+执行层的控制目标由位置目标和力目标组成。合作博弈和线性二次最优控制为多目标反馈律提供了可计算的求解路径\cite{basar1999dynamic,anderson2007optimal}。位置目标代价为
+\begin{equation}
+  J_P(\xi_0,u)=\int_0^{\infty}\e^{-\gamma t}
+  \left(\xi_I^{\T}Q_P\xi_I+u_c^{\T}R_Pu_c\right)\dd t,
+  \label{eq:ch5_JP}
+\end{equation}
+其中 $Q_P\succeq0$ 主要惩罚 $e_T,\dot e_T,e_N,\dot e_N$，$R_P\succ0$ 惩罚控制输入。力目标代价为
+\begin{equation}
+  J_F(\xi_0,u)=\int_0^{\infty}\e^{-\gamma t}
+  \left(\xi_I^{\T}Q_F\xi_I+q_b\Psi_F(y_f)+u_c^{\T}R_Fu_c\right)\dd t,
+  \label{eq:ch5_JF}
+\end{equation}
+其中 $Q_F\succeq0$ 主要惩罚 $e_f$ 和 $\sigma_f$，$q_b\ge0$ 为边界势函数权重，$\gamma>0$ 为折扣因子。接触力边界势函数取
+\begin{equation}
+  \Psi_F(y_f)=
+  \frac{1}{(y_f-F_{\min})^2+\epsilon_b}
+  +
+  \frac{1}{(F_{\max}-y_f)^2+\epsilon_b},
+  \quad \epsilon_b>0.
+  \label{eq:ch5_barrier_potential}
+\end{equation}
+当接触力接近任一边界时，$\Psi_F$ 增大，从优化目标层面提醒控制器远离危险区域。由于该项不是二次函数，为了保持高频控制实时性，反馈律求解主要采用 $\xi_I^{\T}Q_F\xi_I$ 的二次部分；$\Psi_F$ 则通过安全修正、参考投影和硬阈值监督进入在线控制。若需要更强的优化一致性，也可在当前工作点对 $\Psi_F$ 做二阶近似，并将局部 Hessian 并入 $Q_F$。
+
+执行层使用力--位优先级进行帕累托标量化：
+\begin{equation}
+  J_{\alpha}(\xi_0,u)=
+  \alpha_{\mathrm{FP}}J_P(\xi_0,u)+
+  \bigl(1-\alpha_{\mathrm{FP}}\bigr)J_F(\xi_0,u).
+  \label{eq:ch5_Jalpha}
+\end{equation}
+对应的加权矩阵为
+\begin{equation}
+  Q_{\alpha}=\alpha_{\mathrm{FP}}Q_P+\bigl(1-\alpha_{\mathrm{FP}}\bigr)Q_F,
+  \quad
+  R_{\alpha}=\alpha_{\mathrm{FP}}R_P+\bigl(1-\alpha_{\mathrm{FP}}\bigr)R_F.
+  \label{eq:ch5_QRalpha}
+\end{equation}
+在固定 $\alpha_{\mathrm{FP}}$ 和固定环境估计参数下，折扣代数黎卡提方程为
+\begin{equation}
+  A_c^{\T}P_{\alpha}+P_{\alpha}A_c
+  -P_{\alpha}B_cR_{\alpha}^{-1}B_c^{\T}P_{\alpha}
+  +Q_{\alpha}-\gamma P_{\alpha}=0.
+  \label{eq:ch5_discount_are}
+\end{equation}
+对应反馈律为
+\begin{equation}
+  u_c^{*}=-R_{\alpha}^{-1}B_c^{\T}P_{\alpha}\xi_I.
+  \label{eq:ch5_feedback}
+\end{equation}
+实际实现时沿用第四章离线增益表思想，在 $(\alpha_{\mathrm{FP}},\hat K_e)$ 网格上预先求解式\eqref{eq:ch5_discount_are}，在线阶段通过插值得到
+\begin{equation}
+  K(\alpha_{\mathrm{FP}},\hat K_e)=R_{\alpha}^{-1}B_c^{\T}P_{\alpha},
+  \quad
+  u_c=-K(\alpha_{\mathrm{FP}},\hat K_e)\xi_I.
+  \label{eq:ch5_gain_table_law}
+\end{equation}
+注意，$\alpha_{\mathrm{HR}}$ 不进入增益表，而是通过 $x_d^I$ 改变误差状态。这个设计很关键。它把双仲裁问题转化为“参考层变化”和“执行层调度”两个低维问题，避免了三维黎卡提增益表带来的计算负担。
+
+若任务无固定通道约束，则将局部输入映射回基坐标系 $u_x=R_cu_c$，再通过雅可比转置得到关节力矩。若任务存在固定点--轴线约束，给定工具尖端期望位置 $x_t^d=x_d^I$，定义
+\begin{equation}
+  n_d=\frac{p_c-x_t^d}{\norm{p_c-x_t^d}},
+  \quad
+  x_F^d=x_t^d+Ln_d,
+  \label{eq:ch5_tool_to_flange}
+\end{equation}
+其中 $L$ 为工具有效长度，$x_F^d$ 为法兰期望位置。若 $r=\norm{p_c-x_t^d}$，速度映射为
+\begin{equation}
+  \dot x_F^d=\left[I-\frac{L}{r}\left(I-n_dn_d^{\T}\right)\right]\dot x_t^d.
+  \label{eq:ch5_flange_velocity}
+\end{equation}
+控制器在法兰空间计算位置和速度误差，将平移输入与姿态控制输入 $u_{\phi}$ 合成为广义力
+\begin{equation}
+  w=\begin{bmatrix}u_x^{\T}&u_{\phi}^{\T}\end{bmatrix}^{\T},
+  \label{eq:ch5_wrench}
+\end{equation}
+并通过雅可比转置生成关节力矩
+\begin{equation}
+  \tau=J_F^{\T}(q)w.
+  \label{eq:ch5_tau}
+\end{equation}
+最终命令还要经过力矩、速度、工作空间和接触力硬阈值限幅。这样，连续控制律负责性能优化，安全监督层负责处理极端风险。
+
+\section{理论分析}
+\label{sec:ch5_theory}
+
+本节分析双仲裁控制方法的基本性质。由于第五章系统同时包含人类输入、接触模型误差和动态仲裁，本文结合非线性系统稳定性和输入到状态稳定性分析思路\cite{khalil2002nonlinear,sontag1989smooth}，不声称仅由连续控制律即可严格保证所有硬安全约束，而是证明参考投影、仲裁参数和标称反馈律具有可行性、有界性和稳定性基础，并说明安全监督层在实际执行中的作用。
+
+\subsection{可行性与有界性分析}
+\label{subsec:ch5_feasibility}
+
+\begin{lemma}[安全参考投影的有界性]
+\label{lem:ch5_projection_bounded}
+若在每个时刻 $t$，安全集合 $\mathcal X_s(t)$ 非空、闭且局部凸，且人侧监督参考 $x_h(t)$ 有界，则投影问题\eqref{eq:ch5_safe_projection}存在解，且 $x_h^{\mathrm{safe}}(t)$ 有界。若 $\mathcal X_s(t)$ 在所考虑时间区间内变化连续，且 $x_h(t)$ 连续，则 $x_h^{\mathrm{safe}}(t)$ 分段连续。
+\end{lemma}
+
+\begin{proof}
+由于 $\mathcal X_s(t)$ 非空且闭，函数 $\norm{\bar x-x_h(t)}^2$ 连续，并且当 $\bar x$ 远离 $x_h(t)$ 时目标函数增大，因此投影问题存在最优解。若 $\mathcal X_s(t)$ 局部凸，则欧氏投影在局部唯一，并满足非扩张性质。取任意可行点 $x_0(t)\in\mathcal X_s(t)$，由最优性有
+\begin{equation}
+  \norm{x_h^{\mathrm{safe}}(t)-x_h(t)}
+  \le
+  \norm{x_0(t)-x_h(t)}.
+\end{equation}
+若 $x_h(t)$ 和选取的可行参考 $x_0(t)$ 有界，则 $x_h^{\mathrm{safe}}(t)$ 有界。连续性结论来自闭凸集投影算子的连续性；当局部约束激活集合发生切换时，投影可能只保持分段连续。引理得证。
+\end{proof}
+
+\begin{lemma}[双仲裁参数的区间不变性与变化率上界]
+\label{lem:ch5_alpha_invariant}
+设 $\alpha_{\mathrm{HR}}(0),\alpha_{\mathrm{FP}}(0)\in[\alpha_{\min},\alpha_{\max}]$，且 $\alpha_{\mathrm{HR},0}(t),\alpha_{\mathrm{FP},r}(t)\in[\alpha_{\min},\alpha_{\max}]$。由式\eqref{eq:ch5_alpha_hr_filter}和式\eqref{eq:ch5_alpha_fp_filter}生成的仲裁参数满足
+\begin{equation}
+  \alpha_{\mathrm{HR}}(t),\alpha_{\mathrm{FP}}(t)
+  \in[\alpha_{\min},\alpha_{\max}],
+  \quad \forall t\ge0.
+  \label{eq:ch5_alpha_interval}
+\end{equation}
+并且
+\begin{equation}
+  |\dot\alpha_{\mathrm{HR}}(t)|\le
+  \lambda_{\mathrm{HR}}(\alpha_{\max}-\alpha_{\min}),
+  \quad
+  |\dot\alpha_{\mathrm{FP}}(t)|\le
+  \lambda_{\mathrm{FP}}(\alpha_{\max}-\alpha_{\min}).
+  \label{eq:ch5_alpha_rate_bound}
+\end{equation}
+\end{lemma}
+
+\begin{proof}
+以 $\alpha_{\mathrm{HR}}$ 为例。当 $\alpha_{\mathrm{HR}}=\alpha_{\min}$ 时，由 $\alpha_{\mathrm{HR},0}\ge\alpha_{\min}$ 可得 $\dot\alpha_{\mathrm{HR}}\ge0$；当 $\alpha_{\mathrm{HR}}=\alpha_{\max}$ 时，由 $\alpha_{\mathrm{HR},0}\le\alpha_{\max}$ 可得 $\dot\alpha_{\mathrm{HR}}\le0$。因此区间 $[\alpha_{\min},\alpha_{\max}]$ 为正不变集。变化率上界由
+\begin{equation}
+  |\dot\alpha_{\mathrm{HR}}|=
+  \lambda_{\mathrm{HR}}|\alpha_{\mathrm{HR},0}-\alpha_{\mathrm{HR}}|
+  \le \lambda_{\mathrm{HR}}(\alpha_{\max}-\alpha_{\min})
+\end{equation}
+直接得到。对 $\alpha_{\mathrm{FP}}$ 可作完全相同的证明。引理得证。
+\end{proof}
+
+\begin{lemma}[含人影响参考的增广系统]
+\label{lem:ch5_augmented_system}
+在假设\ref{ass:ch5_robot_regular}--\ref{ass:ch5_contact_residual}成立的条件下，以 $x_d^I(t)$ 为期望轨迹构造的局部接触误差状态 $\xi_I$ 可写为
+\begin{equation}
+  \dot\xi_I=A_c\xi_I+B_cu_c+d_I(\xi_I,t),
+  \label{eq:ch5_augmented_system_theory}
+\end{equation}
+且残差满足式\eqref{eq:ch5_residual_bound}。
+\end{lemma}
+
+\begin{proof}
+由 $e_p=x-x_d^I$ 可得 $\dot e_p=\dot x-\dot x_d^I=e_v$。对 $e_v$ 求导，并将修正阻抗动力学、参考加速度项、内环补偿误差和重力残差代入，可得到速度误差动态。法向力误差动态由 Kelvin--Voigt 模型对时间求导得到，其中 $K_e,B_e$ 的局部变化、接触面运动和力测量误差进入残差项。力误差泄漏积分由式\eqref{eq:ch5_sigma_f}给出。将切向位置动态、法向力--位动态和力积分动态按块组合，即得式\eqref{eq:ch5_augmented_system_theory}。由于假设\ref{ass:ch5_human_ref}保证 $x_d^I$ 及其导数有界，假设\ref{ass:ch5_contact_residual}保证模型误差有界，故残差满足式\eqref{eq:ch5_residual_bound}。引理得证。
+\end{proof}
+
+\subsection{稳定性与安全性分析}
+\label{subsec:ch5_stability_safety}
+
+\begin{theorem}[固定力--位优先级下的折扣最优反馈律]
+\label{thm:ch5_optimal_feedback}
+考虑标称系统
+\begin{equation}
+  \dot\xi_I=A_c\xi_I+B_cu_c.
+\end{equation}
+给定固定 $\alpha_{\mathrm{FP}}\in[\alpha_{\min},\alpha_{\max}]$ 与固定环境参数，若 $P_{\alpha}=P_{\alpha}^{\T}\succeq0$ 是折扣黎卡提方程\eqref{eq:ch5_discount_are}的稳定化解，则反馈律\eqref{eq:ch5_feedback}是标量化折扣代价\eqref{eq:ch5_Jalpha}的最优反馈律。
+\end{theorem}
+
+\begin{proof}
+取二次型值函数
+\begin{equation}
+  V_{\alpha}(\xi_I)=\xi_I^{\T}P_{\alpha}\xi_I.
+\end{equation}
+折扣无限时域最优控制问题对应的 Hamilton--Jacobi--Bellman 方程为
+\begin{equation}
+  0=\min_{u_c}\left[
+  \xi_I^{\T}Q_{\alpha}\xi_I+u_c^{\T}R_{\alpha}u_c
+  +\nabla V_{\alpha}^{\T}(A_c\xi_I+B_cu_c)-\gamma V_{\alpha}
+  \right].
+\end{equation}
+由于 $\nabla V_{\alpha}=2P_{\alpha}\xi_I$，对 $u_c$ 求偏导可得
+\begin{equation}
+  2R_{\alpha}u_c+2B_c^{\T}P_{\alpha}\xi_I=0.
+\end{equation}
+由 $R_{\alpha}\succ0$，唯一极小点为
+\begin{equation}
+  u_c^*=-R_{\alpha}^{-1}B_c^{\T}P_{\alpha}\xi_I.
+\end{equation}
+将其代回 HJB 方程，得到式\eqref{eq:ch5_discount_are}。因此该反馈律为折扣标量化代价下的最优反馈律。定理得证。
+\end{proof}
+
+\begin{theorem}[慢变双仲裁下的实际有界性]
+\label{thm:ch5_practical_boundedness}
+设引理\ref{lem:ch5_augmented_system}成立。对任意 $\alpha_{\mathrm{FP}}\in[\alpha_{\min},\alpha_{\max}]$，令
+\begin{equation}
+  A_{\mathrm{cl}}(\alpha_{\mathrm{FP}})=
+  A_c-B_cK(\alpha_{\mathrm{FP}},\hat K_e).
+\end{equation}
+若存在连续可微矩阵函数 $P(\alpha_{\mathrm{FP}})=P^{\T}(\alpha_{\mathrm{FP}})\succ0$ 和正常数 $\underline p,\bar p,m,L_P$，使得
+\begin{equation}
+  \underline p I\preceq P(\alpha_{\mathrm{FP}})\preceq \bar p I,
+  \label{eq:ch5_P_bounds}
+\end{equation}
+\begin{equation}
+  A_{\mathrm{cl}}^{\T}P+PA_{\mathrm{cl}}\preceq -mI,
+  \label{eq:ch5_dissipation}
+\end{equation}
+\begin{equation}
+  \norm{\frac{\partial P}{\partial\alpha_{\mathrm{FP}}}}\le L_P,
+  \label{eq:ch5_P_lipschitz}
+\end{equation}
+且仲裁变化率满足 $|\dot\alpha_{\mathrm{FP}}|\le v_F$，参考层变化和人机仲裁变化引起的残差有界，则当
+\begin{equation}
+  m-L_Pv_F>0
+  \label{eq:ch5_slow_condition}
+\end{equation}
+时，闭环系统在有界残差作用下实际有界。
+\end{theorem}
+
+\begin{proof}
+取参数依赖 Lyapunov 函数
+\begin{equation}
+  V(\xi_I,\alpha_{\mathrm{FP}})=\xi_I^{\T}P(\alpha_{\mathrm{FP}})\xi_I.
+\end{equation}
+沿真实闭环系统
+\begin{equation}
+  \dot\xi_I=A_{\mathrm{cl}}(\alpha_{\mathrm{FP}})\xi_I+d_I(\xi_I,t)
+\end{equation}
+求导，有
+\begin{align}
+  \dot V
+  =&\xi_I^{\T}\left(A_{\mathrm{cl}}^{\T}P+PA_{\mathrm{cl}}\right)\xi_I
+  +2\xi_I^{\T}Pd_I
+  +\xi_I^{\T}\frac{\partial P}{\partial\alpha_{\mathrm{FP}}}\xi_I\dot\alpha_{\mathrm{FP}} .
+\end{align}
+由式\eqref{eq:ch5_dissipation}和式\eqref{eq:ch5_P_lipschitz}可得
+\begin{equation}
+  \dot V\le
+  -(m-L_Pv_F)\norm{\xi_I}^2
+  +2\bar p\norm{\xi_I}\norm{d_I}.
+\end{equation}
+由 Young 不等式，对任意 $\epsilon>0$ 有
+\begin{equation}
+  2\bar p\norm{\xi_I}\norm{d_I}
+  \le
+  \epsilon\norm{\xi_I}^2+\frac{\bar p^2}{\epsilon}\norm{d_I}^2.
+\end{equation}
+当 $\epsilon<m-L_Pv_F$ 时，存在 $c_1,c_2>0$ 使
+\begin{equation}
+  \dot V\le -c_1\norm{\xi_I}^2+c_2\norm{d_I}^2.
+  \label{eq:ch5_iss_like}
+\end{equation}
+若 $d_I$ 有界，则闭环状态最终进入与扰动上界有关的有界邻域。人机仲裁 $\alpha_{\mathrm{HR}}$ 不直接进入增益表，其变化通过 $x_d^I$ 和 $d_I$ 影响系统；由假设\ref{ass:ch5_human_ref}和引理\ref{lem:ch5_alpha_invariant}，该影响有界。定理得证。
+\end{proof}
+
+\begin{remark}[安全势函数与硬安全约束]
+\label{rem:ch5_safety}
+式\eqref{eq:ch5_barrier_potential} 和 $\alpha_{\mathrm{FP}}$ 仲裁提供的是使系统远离接触力边界的控制趋势，并不等价于严格控制屏障函数。实际仿真和实验中仍需设置硬安全监督。例如，当 $y_f>F_{\max}^{\mathrm{hard}}$ 时，控制器应立即停止切向推进并执行卸载；当 $y_f<F_{\min}$ 且持续时间超过阈值时，应降低切向速度并恢复接触。该安全监督层与本章连续控制律共同保证验证过程的工程安全性。
+\end{remark}
+
+\section{仿真验证与结果分析}
+\label{sec:ch5_simulation}
+
+本章仿真验证不以单独复现第三章或第四章为目标，而是检验双仲裁结构在工业约束接触任务中的必要性。具体要回答三个问题：第一，操作者安全的切向修正是否能被系统接受；第二，不安全的法向输入是否能被安全投影和力--位仲裁抑制；第三，在分段变刚度环境中，控制器是否能减少力越界次数，同时保持合理的轨迹覆盖质量。仿真平台包含可重复解析后端、固定参数对照、自动调参记录和绘图模块，用于保证不同策略在相同工况下比较。
+
+\subsection{任务场景与参数设置}
+\label{subsec:ch5_sim_setup}
+
+仿真平台采用七自由度机械臂执行柔性工件表面接触式扫描任务。机器人末端安装等效接触工具，工具尖端与柔性表面之间的接触力由式\eqref{eq:ch5_kv_scalar}生成。机器人自主轨迹 $x_r(t)$ 为一条沿工件表面的名义扫描路径，操作者输入由预设主端序列模拟，包括安全切向修正、目标重定向、短时扰动和不安全法向压入。若需要模拟带通道约束的工业任务，则使用式\eqref{eq:ch5_tool_to_flange}--\eqref{eq:ch5_flange_velocity} 将工具尖端参考映射为法兰参考。
+
+为了让仿真具有实际意义，工件不设为完全均匀表面，而是包含低刚度区、高刚度区和局部缺陷区域。低刚度区可对应软质密封材料或泡棉区域，高刚度区可对应局部支撑增强、材料加厚或曲面边缘区域。缺陷区域不是几何障碍物，而是操作者希望机器人绕开或额外覆盖的工艺区域。这样设置可以同时触发人类轨迹修正和力安全仲裁。
+
+仿真继承第四章的力--位模型参数体系。基准参数按表\ref{tab:ch5_parameters}设置，不同对比方法使用相同扫描路径、相同人类输入序列和相同分段刚度环境。名义扫描深度按照 $K_{\mathrm{nom}}=520\,\mathrm{N/m}$ 生成，因此在高刚度区容易出现过压力，在低刚度区容易出现接触不足，这样可以主动暴露固定仲裁参数的局限。
+
+表\ref{tab:ch5_parameters}给出本章仿真的基准参数。该表用于说明扫描时长、接触力边界、分段刚度和固定优先级基线，使后续不同方法的比较建立在相同工况之上。
+
+\begin{table}[htbp]
+  \centering
+  \caption{工业约束接触扫描仿真基准参数}
+  \label{tab:ch5_parameters}
+  \begin{tabular}{lll}
+    \toprule
+    参数 & 取值或范围 & 含义 \\
+    \midrule
+    $T_s$ & $0.01\,\mathrm{s}$ & 控制周期 \\
+    $T$ & $48\,\mathrm{s}$ & 单次扫描时间 \\
+    $x$ 范围 & $0\sim0.12\,\mathrm{m}$ & 扫描方向 \\
+    $F_{\min}$ & $0.38\,\mathrm{N}$ & 接触力安全下界 \\
+    $F_d$ & $0.70\,\mathrm{N}$ & 期望接触力 \\
+    $F_{\max}$ & $1.16\,\mathrm{N}$ & 接触力安全上界 \\
+    $K_{\mathrm{nom}}$ & $520\,\mathrm{N/m}$ & 名义扫描深度计算刚度 \\
+    $K_e$ & $320/860/230/1120\,\mathrm{N/m}$ & 分段环境刚度 \\
+    $\alpha_{\mathrm{FP}}$ 固定值 & $0.8,0.5,0.2$ & 固定仲裁基线 \\
+    $\hat K_e$ 滤波时间常数 & $0.42\,\mathrm{s}$ & 环境刚度估计平滑 \\
+    \bottomrule
+\end{tabular}
+\end{table}
+
+表\ref{tab:ch5_parameters}说明，本章仿真主动设置了低刚度区、高刚度区和名义刚度不匹配。这样可以让固定参数方法暴露出过压或接触不足问题，也能检验双仲裁是否会随环境变化自动调整执行层优先级。
+
+\subsection{对比方法与评价指标}
+\label{subsec:ch5_compare_metrics}
+
+为验证双仲裁结构的必要性，设置六组对比方法，如表\ref{tab:ch5_methods}所示。所有方法采用相同初始位姿、自主路径、工件参数、期望接触力和人类输入序列。三组固定方法用于检验固定 $\alpha_{\mathrm{FP}}$ 是否足够；仅人机仲裁和仅力--位仲裁分别用于检验单一仲裁层的局限；双仲裁为本章完整方法。其中，强位置优先、均衡优先和强力优先分别表示固定 $\alpha_{\mathrm{FP}}=0.8$、$0.5$ 和 $0.2$，双仲裁表示同时启用参考层人机仲裁、安全投影和执行层力--位仲裁。
+
+表\ref{tab:ch5_methods}列出六组对比方法。该表不仅用于说明实验分组，也用于明确每组方法缺失哪一层能力，从而使后续结果能够对应到“参考层人机仲裁是否必要”和“执行层力--位仲裁是否必要”两个问题。
+
+\begin{table}[htbp]
+  \centering
+  \caption{工业约束接触扫描对比方法}
+  \label{tab:ch5_methods}
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{@{}p{0.16\textwidth}p{0.29\textwidth}p{0.24\textwidth}p{0.19\textwidth}@{}}
+    \toprule
+    方法 & 参考层人机仲裁 & 执行层力--位仲裁 & 验证目的 \\
+    \midrule
+    强位置优先 & 固定接受人类输入 & $\alpha_{\mathrm{FP}}=0.8$ & 高位置优先级基线 \\
+    均衡优先 & 固定接受人类输入 & $\alpha_{\mathrm{FP}}=0.5$ & 折中固定基线 \\
+    强力优先 & 固定接受人类输入 & $\alpha_{\mathrm{FP}}=0.2$ & 高力优先级基线 \\
+    仅人机仲裁 & 动态 $\alpha_{\mathrm{HR}}$ 与安全投影 & $\alpha_{\mathrm{FP}}=0.5$ & 检验缺少执行层动态力--位仲裁的影响 \\
+    仅力--位仲裁 & 不接受人类输入 & 动态 $\alpha_{\mathrm{FP}}$ & 检验缺少参考层人类修正的影响 \\
+    双仲裁 & 动态 $\alpha_{\mathrm{HR}}$ 与安全投影 & 动态 $\alpha_{\mathrm{FP}}$ & 本章方法 \\
+    \bottomrule
+\end{tabular}
+\end{table}
+
+从表\ref{tab:ch5_methods}可以看出，三组固定方法只能检验不同固定优先级的局限；仅人机仲裁和仅力--位仲裁分别保留一个动态层；双仲裁同时保留安全参考生成和动态执行调度，因此应在综合指标上体现更稳定的折中能力。
+
+仿真评价指标分为四类。第一类为轨迹指标：
+\begin{equation}
+  E_x^{\mathrm{RMS}}=
+  \sqrt{\frac{1}{N}\sum_{k=1}^{N}\norm{x_k-x_{d,k}^{I}}^2}.
+  \label{eq:ch5_metric_pos}
+\end{equation}
+第二类为力安全指标：
+\begin{equation}
+  E_F^{\mathrm{RMS}}=
+  \sqrt{\frac{1}{N}\sum_{k=1}^{N}(y_{f,k}-F_d)^2},
+  \label{eq:ch5_metric_force}
+\end{equation}
+\begin{equation}
+  N_{\mathrm{upper}}=\sum_{k=1}^{N}\mathbb I(y_{f,k}>F_{\max}),
+  \quad
+  N_{\mathrm{lower}}=\sum_{k=1}^{N}\mathbb I(y_{f,k}<F_{\min}).
+  \label{eq:ch5_metric_bound}
+\end{equation}
+本文表格中进一步使用越界持续时间
+\begin{equation}
+  T_{\mathrm{vio}}=T_s\left(N_{\mathrm{upper}}+N_{\mathrm{lower}}\right),
+  \label{eq:ch5_metric_violation_time}
+\end{equation}
+它比单纯计数更容易和扫描任务时长对应。
+第三类为人机协同指标。人类意图接受率定义为
+\begin{equation}
+  R_{\mathrm{acc}}=
+  \frac{\sum_{k=1}^{N}\norm{x_{d,k}^{I}-x_{r,k}}}
+  {\sum_{k=1}^{N}\norm{x_{h,k}-x_{r,k}}+\varepsilon}.
+  \label{eq:ch5_metric_accept}
+\end{equation}
+危险输入抑制率定义为
+\begin{equation}
+  R_{\mathrm{sup}}=
+  1-\frac{\sum_{k\in\mathcal K_N}\max\{z_{r,k}-z_{d,k}^{I},0\}}
+  {\sum_{k\in\mathcal K_N}\max\{z_{r,k}-z_{h,k},0\}+\varepsilon},
+  \label{eq:ch5_metric_suppress}
+\end{equation}
+其中 $\mathcal K_N$ 为人类输入可能导致法向过压的时间索引集合。第四类为执行指标，包括几何约束均方根误差、关节力矩峰值、任务空间 jerk 和单周期计算时间。
+
+\subsection{预期现象与分析逻辑}
+\label{subsec:ch5_expected_logic}
+
+仿真设计包括四类核心工况。第一类为安全切向修正：操作者在扫描过程中给出横向偏移，使机器人绕开局部缺陷区域或覆盖新的感兴趣区域。该工况用于检验 $\alpha_{\mathrm{HR}}$ 是否能够使 $x_d^I$ 平滑偏向人侧参考，同时保持接触力稳定。第二类为不安全法向压入：操作者沿工件法向给出继续压入命令。该工况用于检验安全投影和 $\alpha_{\mathrm{FP}}$ 是否能够抑制危险参考，降低 $N_{\mathrm{upper}}$ 和最大接触力。第三类为分段变刚度环境：机器人从低刚度区域进入高刚度区域。该工况用于检验 $\rho_F$ 下降时，控制器是否自动降低 $\alpha_{\mathrm{FP}}$ 并增强力调节。第四类为综合工况：同时包含安全切向修正、局部刚度突变和短时扰动，用于检验方法在多因素耦合情况下的可执行性。
+
+表\ref{tab:ch5_scenarios}给出仿真工况与验证目的。四类工况按从单因素到综合因素的顺序组织，使结果分析不只停留在一组总体分数，而能够分别检查切向修正、法向误推、刚度突变和扰动耦合下的行为。
+
+\begin{table}[htbp]
+  \centering
+  \caption{仿真工况与主要验证目的}
+  \label{tab:ch5_scenarios}
+  \begin{tabular}{lll}
+    \toprule
+    工况 & 输入或环境变化 & 验证目的 \\
+    \midrule
+    S1 安全切向修正 & 横向人类输入 & 验证人类意图接受能力 \\
+    S2 不安全法向压入 & 法向压入命令 & 验证安全投影和力边界保护 \\
+    S3 分段变刚度 & $K_e,B_e$ 切换 & 验证力--位优先级自适应 \\
+    S4 综合工况 & 修正、扰动、刚度变化并存 & 验证闭环综合可执行性 \\
+    \bottomrule
+\end{tabular}
+\end{table}
+
+表\ref{tab:ch5_scenarios}也说明，本章仿真并不把人类输入一概视为扰动。安全切向修正应被接受，不安全法向压入应被抑制，这正是双仲裁结构区别于单一自动控制器的关键。
+
+结果分析应围绕“方法必要性”展开，而不是只比较单一误差最小值。若双仲裁相比仅人机仲裁显著降低力越界时间，说明仅有人机意图仲裁不足以处理接触安全问题。若双仲裁相比仅力--位仲裁提高 $R_{\mathrm{acc}}$ 并能跟随安全的人类切向修正，说明仅有力--位仲裁不足以体现人的监督作用。若双仲裁相比三组固定 $\alpha_{\mathrm{FP}}$ 基线获得更低综合评分，则说明第五章的分层动态仲裁优于固定参数仲裁。
+
+\subsection{统计结果与图像分析}
+\label{subsec:ch5_result_analysis}
+
+表\ref{tab:ch5_results} 给出了六组方法的统计结果。可以看到，强位置优先因位置优先级过高，在分段高刚度区产生明显力越界，越界时间达到 $20.10\,\mathrm{s}$；强力优先的力均方根误差最小，但任务轨迹误差仍为 $2.49\,\mathrm{mm}$，并且对安全切向修正的接受率只有 $0.58$。这说明固定小 $\alpha_{\mathrm{FP}}$ 可以改善力误差，但并不是完整的人机协同方案。相比之下，双仲裁的综合评分为 $3.843$，优于最佳固定参数强力优先的 $4.735$；同时它保持了 $0.89$ 的切向修正接受率和 $0.93$ 的危险法向参考抑制率。
+
+\begin{table}[htbp]
+  \centering
+  \caption{工业约束接触扫描对比结果}
+  \label{tab:ch5_results}
+  \small
+  \begin{tabular}{lrrrrrrr}
+    \toprule
+    方法 & $S$ & $E_F^{\mathrm{RMS}}$/N & $|e_F|_{\max}$/N & $T_{\mathrm{vio}}$/s & $E_{\mathrm{task}}$/mm & $R_{\mathrm{acc}}$ & $R_{\mathrm{sup}}$ \\
+    \midrule
+    强位置优先 & 28.495 & 0.465 & 1.192 & 20.10 & 2.57 & 0.58 & 0.42 \\
+    均衡优先 & 8.386 & 0.317 & 1.754 & 4.50 & 2.52 & 0.58 & 0.42 \\
+    强力优先 & 4.735 & 0.204 & 2.276 & 1.54 & 2.49 & 0.58 & 0.42 \\
+    仅人机仲裁 & 8.001 & 0.315 & 1.751 & 4.50 & 1.74 & 0.89 & 0.91 \\
+    仅力--位仲裁 & 4.320 & 0.235 & 1.530 & 1.52 & 5.63 & 0.00 & 1.00 \\
+    双仲裁 & 3.843 & 0.230 & 1.634 & 1.48 & 1.74 & 0.89 & 0.93 \\
+    \bottomrule
+\end{tabular}
+\end{table}
+
+表\ref{tab:ch5_results}揭示了一个重要现象：单一指标最优并不等价于任务综合最优。为直观呈现各方法在综合评分、力误差、越界时间和人类修正指标之间的差异，图\ref{fig:ch5_metrics_bars}给出柱状对比。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.94\textwidth]{ch5_metrics_bars.png}
+  \caption{固定参数与双仲裁方法的综合指标对比}
+  \label{fig:ch5_metrics_bars}
+\end{figure}
+
+图\ref{fig:ch5_metrics_bars} 更直观地展示了这种折中关系。单独看力误差，强力优先似乎有吸引力；但它对人类修正和任务轨迹的处理较弱，危险法向参考抑制率也只有 $0.42$。单独看人类意图响应，仅人机仲裁可以跟随切向修正，但由于执行层仍为固定 $\alpha_{\mathrm{FP}}=0.5$，进入高刚度区后力越界时间明显高于本章方法。仅力--位仲裁的力边界保护较好，却完全放弃了人类在线修正，导致任务轨迹误差上升到 $5.63\,\mathrm{mm}$。本章方法恰好弥补了这两个单一仲裁的短板。
+
+为了进一步解释双仲裁综合评分更低的原因，图\ref{fig:ch5_force_alpha_stiffness}展示接触力、执行层优先级和估计刚度的时序关系。该图用于判断 $\alpha_{\mathrm{FP}}$ 是否真的随刚度和力安全状态变化，而不是保持某个固定折中点。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.94\textwidth]{ch5_force_alpha_stiffness_timeseries.png}
+  \caption{接触力、力--位优先级与估计刚度的时序响应}
+  \label{fig:ch5_force_alpha_stiffness}
+\end{figure}
+
+图\ref{fig:ch5_force_alpha_stiffness} 给出了接触力、$\alpha_{\mathrm{FP}}$ 和 $\hat K_e$ 的时序曲线。在固定参数方法中，$\alpha_{\mathrm{FP}}$ 不随环境变化，因此低刚度区和高刚度区只能使用同一个折中点。双仲裁方法则不同：当 $\hat K_e$ 上升且接触力裕度下降时，$\alpha_{\mathrm{FP}}$ 自动下降，使控制器从位置优先转向力调节；当环境回到较软区域并且力安全裕度恢复后，$\alpha_{\mathrm{FP}}$ 又逐步回到较高水平。统计上，双仲裁方法的 $\alpha_{\mathrm{FP}}$ 范围为 $[0.19,0.60]$，按第四章给出的优先级--刚度相关系数定义计算得到 $r_{\alpha K}=-0.97$。该负相关说明，在本章安全投影和接触力边界共同作用下，环境越硬，执行层越主动降低位置优先级以释放法向力调节能力。
+
+在验证执行层力安全响应之后，还需要检查参考层人机仲裁是否保留了安全的人类经验。图\ref{fig:ch5_trajectory_xy}展示安全切向修正下的扫描轨迹，用于说明人类横向修正能否进入最终期望轨迹。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.82\textwidth]{ch5_trajectory_xy.png}
+  \caption{安全切向修正下的扫描轨迹与缺陷区域绕行}
+  \label{fig:ch5_trajectory_xy}
+\end{figure}
+
+图\ref{fig:ch5_trajectory_xy} 说明了参考层人机仲裁的作用。灰色圆形区域表示操作者希望绕开的局部缺陷区域，虚线表示包含安全切向修正的任务参考。仅力--位仲裁方法不接受人类输入，因此轨迹仍沿名义中线前进；三个固定方法虽然接受了一部分人类输入，但接受率仅为 $0.58$。本章方法通过动态 $\alpha_{\mathrm{HR}}$ 使安全切向输入进入 $x_d^I$，因此能够沿缺陷区域外侧完成扫描，同时没有把该切向修正错误地扩展为危险法向压入。
+
+与安全切向修正相对，图\ref{fig:ch5_unsafe_normal_push}展示不安全法向压入工况下的局部响应。该图重点比较固定参数方法和双仲裁方法是否会把危险法向输入写入期望参考并推高接触力。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.94\textwidth]{ch5_unsafe_normal_push_detail.png}
+  \caption{不安全法向压入工况下的固定参数与双仲裁响应}
+  \label{fig:ch5_unsafe_normal_push}
+\end{figure}
+
+图\ref{fig:ch5_unsafe_normal_push} 展示了 $24\sim30.5\,\mathrm{s}$ 的不安全法向输入。固定方法由于缺少参考层安全投影，会把一部分法向压入写入期望参考；若此时 $\alpha_{\mathrm{FP}}$ 又偏大，就会直接推高接触力。双仲裁方法在参考层先对 $x_h$ 做安全投影，再通过 $\rho_F$ 和 $\hat K_e$ 降低执行层位置优先级，因此危险法向参考抑制率达到 $0.93$。换句话说，人的切向经验被保留下来，人的法向误推被削弱，这正是第五章分层设计的核心目的。
+
+最后，图\ref{fig:ch5_dual_alpha_khat}以散点形式展示 $\alpha_{\mathrm{FP}}$、估计刚度和力安全裕度之间的关系，用于从统计分布角度补充说明执行层仲裁的可解释性。
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.74\textwidth]{ch5_dual_alpha_khat_response.png}
+  \caption{双仲裁方法中 $\alpha_{\mathrm{FP}}$ 对估计刚度和力安全裕度的响应}
+  \label{fig:ch5_dual_alpha_khat}
+\end{figure}
+
+图\ref{fig:ch5_dual_alpha_khat} 从散点角度进一步展示了 $\alpha_{\mathrm{FP}}$ 的物理含义。横轴为估计刚度 $\hat K_e$，纵轴为力--位优先级，颜色表示力安全裕度 $\rho_F$。高刚度、低裕度区域对应较低的 $\alpha_{\mathrm{FP}}$，说明控制器主动转向力调节；低刚度或裕度恢复时，$\alpha_{\mathrm{FP}}$ 回升，机器人重新强调轨迹推进。相比固定 $\alpha_{\mathrm{FP}}$，这种连续变化避免了在所有刚度区间使用同一个控制权重。
+
+需要强调的是，双仲裁并没有在每一个单项指标上都取得最小值。例如，强力优先的力均方根误差略低于双仲裁方法，这是因为它长期保持较强力优先级。但强力优先对人类修正和任务轨迹的处理较弱，综合评分仍然落后。对于工业约束接触任务，单一力误差最小并不等价于任务最好；真正需要的是在力边界、轨迹覆盖和人类监督之间取得可解释且可调试的平衡。从这个意义上看，本章仿真结果体现了双仲裁方法相对固定参数仲裁的优势。
+
+\section{本章小结}
+\label{sec:ch5_summary}
+
+本章面向工业约束接触任务，提出了一种双仲裁合作博弈控制方法。与第三章只关注人机意图共享、第四章只关注柔性接触力--位协同不同，本章将两类问题放入同一工业应用背景中处理：操作者通过主端或手柄输入影响机器人期望轨迹，接触力安全状态通过力--位优先级影响执行控制律。为避免符号和功能混淆，本章将 $\alpha_{\mathrm{HR}}$ 限定在参考轨迹层，将 $\alpha_{\mathrm{FP}}$ 限定在执行控制层，并通过安全投影保证人侧参考不会直接破坏接触力边界。
+
+在方法设计上，本章首先建立了工业约束接触任务模型，解释了自主参考、人类输入、接触力安全区间、几何约束误差和局部柔性接触参数的物理含义；随后给出了人影响参考轨迹生成方法、接触安全优先级仲裁方法以及基于折扣黎卡提方程的合作博弈反馈律。为提高可实现性，本章保留第四章的二维增益表结构，使在线增益只依赖 $\alpha_{\mathrm{FP}}$ 和 $\hat K_e$，而将 $\alpha_{\mathrm{HR}}$ 的影响体现在期望轨迹 $x_d^I$ 中。在理论分析上，本章给出了安全投影有界性、双仲裁参数区间不变性、固定优先级下最优反馈律以及慢变仲裁下实际有界性说明。在仿真设计上，本章围绕柔性工件接触式扫描、打磨和检测任务，构建了安全切向修正、不安全法向压入、分段变刚度和综合工况，为后续实验数据生成与结果分析提供了完整方案。

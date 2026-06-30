@@ -1,0 +1,17 @@
+% !TeX root = ../main_ustc.tex
+
+\begin{abstract}
+约束操作场景下的人机协同控制需要同时处理操作者意图、机器人自主目标、几何约束和环境接触安全之间的耦合关系。针对刚性几何约束任务中控制权分配不清、柔性接触任务中位置精度与接触力安全难以兼顾、工业约束接触任务中人类在线修正与力安全边界相互制约等问题，本文围绕合作博弈共享控制展开研究。首先，建立机器人运动学、动力学、约束运动、接触建模和稳定性分析等理论基础，并统一全文符号体系。其次，面向刚性约束操作任务，构造意图驱动的合作微分博弈共享控制方法，通过人机仲裁参数 $\alpha_{\mathrm{HR}}$ 在操作者监督目标和机器人自主目标之间形成可解释的帕累托权衡。再次，面向柔性接触扫描任务，建立含残差项的力--位增广系统，引入环境参数在线估计、阶段检验和力安全裕度仲裁机制，通过力--位优先级 $\alpha_{\mathrm{FP}}$ 实现位置跟踪和接触力调节的协同优化。最后，面向工业约束接触任务，将参考层人机仲裁和执行层力--位仲裁融合为双仲裁合作博弈控制框架，使安全的切向人类修正能够进入任务参考，同时抑制可能造成法向过压的危险输入。仿真结果表明，所提方法能够在保持几何约束合规性和轨迹覆盖能力的同时降低力越界、力抖动和固定仲裁参数带来的折中损失，为约束接触操作中的人机协同控制提供了系统化、可解释且便于工程调试的思路。
+
+\ustcsetup{
+  keywords  = {人机协同控制, 合作博弈, 动态仲裁, 几何约束, 柔性接触},
+  keywords* = {Human-robot collaborative control, Cooperative game, Dynamic arbitration, Geometric constraint, Flexible contact},
+}
+\end{abstract}
+
+\begin{abstract*}
+Human-robot collaborative control in constrained manipulation requires a unified treatment of operator intention, robot autonomy, geometric constraints, and contact safety. This thesis investigates cooperative game based shared control for rigid geometric constraints, flexible contact tasks, and industrial constrained contact tasks. First, the theoretical foundations of robot kinematics, dynamics, constrained motion, contact modeling, optimal control, differential games, and stability analysis are summarized with a consistent notation system. Second, for rigidly constrained manipulation, an intention-driven cooperative differential game controller is formulated, in which the human-robot arbitration parameter $\alpha_{\mathrm{HR}}$ provides an interpretable Pareto trade-off between the operator supervision objective and the robot autonomous objective. Third, for flexible contact scanning, an augmented force-position system with residual dynamics is established, and online environment estimation, phase-aware checks, and force safety margin arbitration are introduced to schedule the force-position priority $\alpha_{\mathrm{FP}}$. Finally, for industrial constrained contact tasks, the reference-level human-robot arbitration and the execution-level force-position arbitration are integrated into a dual-arbitration cooperative game framework. Safe tangential human corrections are accepted at the reference level, while unsafe normal inputs that may violate contact force bounds are suppressed through safety projection and force-position scheduling. Simulation results show that the proposed framework reduces force bound violations, force jitter, and the compromise loss caused by fixed arbitration parameters while maintaining geometric constraint compliance and trajectory coverage.
+\ustcsetup{
+  keywords* = {Human-robot collaborative control, Cooperative game, Dynamic arbitration, Geometric constraint, Flexible contact},
+}
+\end{abstract*}

@@ -1,0 +1,31 @@
+% !TEX encoding = UTF-8
+% !TEX program = latexmk
+\documentclass[degree=master,degree-type=academic,fontset=fandol,output=electronic,openany]{ustcthesis}
+
+\input{ustcsetup}
+
+\begin{document}
+
+\maketitle
+\statement
+
+\frontmatter
+\input{chapters/abstract}
+\tableofcontents
+\listoffiguresandtables
+
+\mainmatter
+\input{chapters/chapter1}
+\input{chapters/chapter2}
+\input{chapters/chapter3}
+\input{chapters/chapter4}
+\input{chapters/chapter5}
+\input{chapters/chapter6}
+
+\bibliography{refs/references}
+
+\backmatter
+\input{chapters/acknowledgements}
+\input{chapters/achievements}
+
+\end{document}

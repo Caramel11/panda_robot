@@ -129,43 +129,84 @@ class Config:
     continuous_risk_margin_start = 0.20
     continuous_risk_margin_full = 0.04
     continuous_smooth_tau = 0.60
+    continuous_stiffness_alpha_enabled = False
+    continuous_stiffness_low_threshold = 250.0
+    continuous_stiffness_high_threshold = 1000.0
+    continuous_stiffness_low_alpha = 0.30
+    continuous_stiffness_high_alpha = 0.75
+    continuous_stiffness_blend = 0.0
 
 
 def apply_benchmark_config(cfg, benchmark):
     """按命令行 benchmark 覆盖实验条件。
 
     default 保持原始力-位一致扫描；force_margin_challenge 刻意使用固定 z
-    参考和强刚度变化，制造 fixed alpha 难以兼顾的力/位置冲突，用来检验
-    continuous_force_margin 是否能根据力边界和位置误差连续调整 alpha。
+    参考和强刚度变化，制造 fixed alpha 难以兼顾的力/位置冲突。stiffness_alpha_showcase
+    进一步采用软/硬环境交替，用来检验 continuous_force_margin 是否能在稳态
+    扫描中随估计刚度改变 z 向 alpha。
     """
     if benchmark == "default":
         return
-    if benchmark != "force_margin_challenge":
+    if benchmark not in ("force_margin_challenge", "stiffness_alpha_showcase"):
         raise ValueError(f"unknown benchmark: {benchmark}")
+
+    if benchmark == "force_margin_challenge":
+        cfg.force_consistent_scan_z = False
+        cfg.scan_z = 0.298
+        cfg.scan_vx = 0.0022
+        cfg.F_desired = 1.0
+        cfg.F_min = 0.70
+        cfg.F_max = 1.32
+        cfg.stiffness_zones = [
+            (0.40, 0.418, 720, 8),
+            (0.418, 0.444, 230, 4),
+            (0.444, 0.462, 1150, 14),
+            (0.462, 0.480, 420, 6),
+        ]
+        cfg.adjustment_force_error = 0.25
+        cfg.adjustment_timeout = 5.0
+        cfg.continuous_safe_tracking_alpha = 0.52
+        cfg.continuous_safe_tracking_extra = 0.10
+        cfg.continuous_force_balance_alpha = 0.42
+        cfg.continuous_force_guard_alpha = 0.62
+        cfg.continuous_low_force_guard_alpha = 0.16
+        cfg.continuous_alpha_min = 0.12
+        cfg.continuous_alpha_max = 0.68
+        cfg.continuous_risk_margin_start = 0.24
+        cfg.continuous_risk_margin_full = 0.04
+        cfg.continuous_smooth_tau = 0.55
+        return
 
     cfg.force_consistent_scan_z = False
     cfg.scan_z = 0.298
     cfg.scan_vx = 0.0018
     cfg.F_desired = 1.0
-    cfg.F_min = 0.55
-    cfg.F_max = 1.45
+    cfg.F_min = 0.66
+    cfg.F_max = 1.38
     cfg.stiffness_zones = [
-        (0.40, 0.425, 500, 5),
-        (0.425, 0.452, 250, 4),
-        (0.452, 0.480, 1000, 10),
+        (0.40, 0.418, 260, 4),
+        (0.418, 0.440, 780, 9),
+        (0.440, 0.460, 220, 4),
+        (0.460, 0.480, 1050, 12),
     ]
     cfg.adjustment_force_error = 0.25
     cfg.adjustment_timeout = 5.0
-    cfg.continuous_safe_tracking_alpha = 0.24
-    cfg.continuous_safe_tracking_extra = 0.02
-    cfg.continuous_force_balance_alpha = 0.24
-    cfg.continuous_force_guard_alpha = 0.38
-    cfg.continuous_low_force_guard_alpha = 0.12
-    cfg.continuous_alpha_min = 0.10
-    cfg.continuous_alpha_max = 0.42
-    cfg.continuous_risk_margin_start = 0.18
-    cfg.continuous_risk_margin_full = 0.04
-    cfg.continuous_smooth_tau = 0.80
+    cfg.continuous_safe_tracking_alpha = 0.42
+    cfg.continuous_safe_tracking_extra = 0.08
+    cfg.continuous_force_balance_alpha = 0.42
+    cfg.continuous_force_guard_alpha = 0.68
+    cfg.continuous_low_force_guard_alpha = 0.22
+    cfg.continuous_alpha_min = 0.16
+    cfg.continuous_alpha_max = 0.72
+    cfg.continuous_risk_margin_start = 0.26
+    cfg.continuous_risk_margin_full = 0.05
+    cfg.continuous_smooth_tau = 0.25
+    cfg.continuous_stiffness_alpha_enabled = True
+    cfg.continuous_stiffness_low_threshold = 260.0
+    cfg.continuous_stiffness_high_threshold = 760.0
+    cfg.continuous_stiffness_low_alpha = 0.26
+    cfg.continuous_stiffness_high_alpha = 0.62
+    cfg.continuous_stiffness_blend = 0.86
 
 
 def contact_delta_from_surface(cfg, z):
@@ -434,7 +475,7 @@ def run_trial(robot, kin_tool, kin_flange,
         F_actual = abs(F_z)
         e_f_scalar = F_actual - cfg.F_desired
         e_f_dot = (e_f_scalar - prev_ef) / dt; prev_ef = e_f_scalar
-        e_r_scalar = np.linalg.norm(tp[:2] - np.array([x_cur, cfg.scan_y]))
+        e_r_scalar = abs(tp[2] - z_scan_ref)
         de_r = (e_r_scalar - prev_er) / dt; prev_er = e_r_scalar
         dK = (K_hat - prev_K) / dt; prev_K = K_hat
 
@@ -564,7 +605,7 @@ def run_trial(robot, kin_tool, kin_flange,
         F_desired = cfg.F_desired
         e_f_scalar = F_actual - F_desired
         e_f_dot = (e_f_scalar - prev_ef) / dt; prev_ef = e_f_scalar
-        e_r_scalar = np.linalg.norm(tp[:2] - np.array([x_cur, cfg.scan_y]))
+        e_r_scalar = abs(tp[2] - z_scan_ref)
         de_r = (e_r_scalar - prev_er) / dt; prev_er = e_r_scalar
         dK = (K_hat - prev_K) / dt; prev_K = K_hat
 
@@ -685,6 +726,12 @@ STRATEGIES = {
         risk_margin_start=cfg.continuous_risk_margin_start,
         risk_margin_full=cfg.continuous_risk_margin_full,
         smooth_tau=cfg.continuous_smooth_tau,
+        stiffness_alpha_enabled=cfg.continuous_stiffness_alpha_enabled,
+        stiffness_low_threshold=cfg.continuous_stiffness_low_threshold,
+        stiffness_high_threshold=cfg.continuous_stiffness_high_threshold,
+        stiffness_low_alpha=cfg.continuous_stiffness_low_alpha,
+        stiffness_high_alpha=cfg.continuous_stiffness_high_alpha,
+        stiffness_blend=cfg.continuous_stiffness_blend,
     ),
     'online_priority': lambda cfg: OnlinePriorityAdaptationAlphaScheduler(
         dt=0.01,
@@ -757,8 +804,8 @@ def main():
     ap.add_argument(
         '--benchmark',
         default='default',
-        choices=['default', 'force_margin_challenge'],
-        help='实验场景: default 为原始力位一致扫描; force_margin_challenge 为固定 z + 强刚度变化压力测试',
+        choices=['default', 'force_margin_challenge', 'stiffness_alpha_showcase'],
+        help='实验场景: default 为原始力位一致扫描; force_margin_challenge 为固定 z + 强刚度变化压力测试; stiffness_alpha_showcase 为刚度敏感 alpha 展示场景',
     )
     args = ap.parse_args()
 
@@ -786,7 +833,13 @@ def main():
         f"high_guard={cfg.continuous_force_guard_alpha:.2f}, "
         f"low_guard={cfg.continuous_low_force_guard_alpha:.2f}, "
         f"range=[{cfg.continuous_alpha_min:.2f}, {cfg.continuous_alpha_max:.2f}], "
-        f"tau={cfg.continuous_smooth_tau:.2f}s"
+        f"tau={cfg.continuous_smooth_tau:.2f}s, "
+        f"K_alpha_enabled={cfg.continuous_stiffness_alpha_enabled}, "
+        f"K_range=[{cfg.continuous_stiffness_low_threshold:.1f}, "
+        f"{cfg.continuous_stiffness_high_threshold:.1f}]N/m, "
+        f"alpha_K=[{cfg.continuous_stiffness_low_alpha:.2f}, "
+        f"{cfg.continuous_stiffness_high_alpha:.2f}], "
+        f"K_blend={cfg.continuous_stiffness_blend:.2f}"
     )
 
     # control_mode='are' 使用原始 4D ARE 查表；
