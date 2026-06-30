@@ -1,0 +1,171 @@
+\documentclass[UTF8]{ctexart}
+\usepackage[paperwidth=17.6cm,paperheight=9.8cm,margin=0.08cm]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,calc}
+\pagestyle{empty}
+
+\definecolor{mainblue}{RGB}{58,103,186}
+\definecolor{deepblue}{RGB}{43,80,155}
+\definecolor{goldline}{RGB}{181,143,35}
+\definecolor{redline}{RGB}{214,72,67}
+\definecolor{greenline}{RGB}{52,154,92}
+\definecolor{purpleline}{RGB}{120,103,190}
+\definecolor{grayline}{RGB}{110,110,110}
+
+\tikzset{
+  box/.style={
+    rounded corners=5pt,
+    draw=deepblue,
+    line width=0.7pt,
+    fill=mainblue,
+    text=white,
+    align=center,
+    font=\small,
+    inner sep=5pt,
+    minimum height=1.18cm
+  },
+  smallbox/.style={
+    box,
+    font=\footnotesize,
+    minimum height=0.88cm
+  },
+  groupbox/.style={
+    draw=#1,
+    dashed,
+    line width=0.85pt,
+    rounded corners=4pt,
+    inner sep=7pt
+  },
+  flow/.style={
+    -{Stealth[length=2.7mm,width=2.1mm]},
+    draw=deepblue,
+    line width=1.15pt
+  },
+  softflow/.style={
+    -{Stealth[length=2.4mm,width=1.9mm]},
+    draw=grayline,
+    line width=0.8pt,
+    dashed
+  },
+  title/.style={
+    font=\small\bfseries,
+    align=center,
+    text=black
+  },
+  side/.style={
+    font=\small\bfseries,
+    align=center,
+    text=black
+  }
+}
+
+\begin{document}
+\noindent
+\begin{tikzpicture}[x=1cm,y=1cm,shift={(1.78,4.50)}]
+
+  \node[title] at (0,4.15) {问题来源};
+  \node[title] at (3.0,4.15) {理论基础};
+  \node[title] at (6.15,4.15) {执行层控制器};
+  \node[title] at (9.45,4.15) {参考层仲裁器};
+  \node[title] at (12.75,4.15) {综合验证};
+
+  \node[box, text width=2.20cm, minimum height=5.55cm] (ch1) at (0,0.55) {
+    第一章\\
+    绪论与问题凝练\\[0.25em]
+    \footnotesize
+    轨迹精度\\
+    接触力安全\\
+    人类在线修正\\
+    几何边界约束
+  };
+
+  \node[box, text width=2.30cm, minimum height=5.55cm] (ch2) at (3.0,0.55) {
+    第二章\\
+    控制理论基础\\[0.25em]
+    \footnotesize
+    任务空间建模\\
+    柔性接触模型\\
+    阻抗与力位控制\\
+    合作博弈理论
+  };
+
+  \node[box, text width=2.45cm] (ch3a) at (6.15,2.65) {
+    第三章\\
+    合作博弈\\
+    力位协同控制
+  };
+  \node[smallbox, text width=2.45cm, below=0.23cm of ch3a] (ch3b) {
+    力位增广状态\\
+    $\xi$ 与接触力误差
+  };
+  \node[smallbox, text width=2.45cm, below=0.18cm of ch3b] (ch3c) {
+    折扣帕累托代价\\
+    反馈律与增益调度
+  };
+  \node[smallbox, text width=2.45cm, below=0.18cm of ch3c] (ch3d) {
+    力安全裕度\\
+    $\rho_F,\alpha_{\mathrm{FP}}$
+  };
+
+  \node[box, text width=2.45cm] (ch4a) at (9.45,2.65) {
+    第四章\\
+    人机动态仲裁
+  };
+  \node[smallbox, text width=2.45cm, below=0.23cm of ch4a] (ch4b) {
+    操作者输入特征\\
+    幅值、持续时间与方向
+  };
+  \node[smallbox, text width=2.45cm, below=0.18cm of ch4b] (ch4c) {
+    安全参考投影\\
+    切向修正与法向抑制
+  };
+  \node[smallbox, text width=2.45cm, below=0.18cm of ch4c] (ch4d) {
+    参考层权重\\
+    $\alpha_{\mathrm{HR}}$
+  };
+
+  \node[box, text width=2.50cm] (ch5a) at (12.75,1.80) {
+    第五章\\
+    综合实验验证
+  };
+  \node[smallbox, text width=2.50cm, below=0.23cm of ch5a] (ch5b) {
+    无 RCM 柔性表面接触
+  };
+  \node[smallbox, text width=2.50cm, below=0.18cm of ch5b] (ch5c) {
+    带 RCM 长工具操作
+  };
+  \node[smallbox, text width=2.50cm, below=0.18cm of ch5c] (ch5d) {
+    控制器对比\\
+    仲裁消融与实物验证
+  };
+
+  \node[box, fill=deepblue, text width=2.75cm, minimum height=0.95cm] (ch6) at (12.75,-3.18) {
+    第六章\quad 总结与展望
+  };
+
+  \begin{pgfonlayer}{background}
+    \node[groupbox=goldline, fit=(ch1)] (g1) {};
+    \node[groupbox=grayline, fit=(ch2)] (g2) {};
+    \node[groupbox=redline, fit=(ch3a)(ch3b)(ch3c)(ch3d)] (g3) {};
+    \node[groupbox=greenline, fit=(ch4a)(ch4b)(ch4c)(ch4d)] (g4) {};
+    \node[groupbox=purpleline, fit=(ch5a)(ch5b)(ch5c)(ch5d)] (g5) {};
+  \end{pgfonlayer}
+
+  \draw[flow] (ch1.east) -- (ch2.west);
+  \draw[flow] (ch2.east) -- (ch3a.west);
+  \draw[flow] (ch3a.east) -- (ch4a.west);
+  \draw[flow] (ch4a.east) -- (ch5a.west);
+  \draw[flow] (ch5d.south) -- (ch6.north);
+
+  \draw[softflow] ($(ch3d.east)+(0.05,-0.02)$) .. controls (8.1,-1.70) and (10.55,-1.70) .. (ch5d.west);
+  \draw[softflow] ($(ch4d.east)+(0.05,0.02)$) .. controls (10.90,-1.20) and (11.40,-1.15) .. (ch5c.west);
+
+  \node[side, rotate=90] at (-1.65,0.55) {研究背景与科学问题};
+  \node[side, rotate=90] at (14.55,-0.45) {平台验证与论文收束};
+
+  \node[font=\footnotesize, align=center, text=black!75] at (6.15,-4.05) {
+    主线关系：工程需求提出问题，理论基础支撑建模，第三章解决执行层力位协调，第四章解决参考层人机仲裁，第五章在统一平台验证二者组合效果
+  };
+
+\end{tikzpicture}
+\end{document}
