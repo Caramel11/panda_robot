@@ -1,0 +1,65 @@
+# 第5章综合实验默认配置。
+#
+# 该文件用于记录论文方法矩阵和统一判据，便于人工查阅与后续扩展。
+# 当前批量运行脚本的主要方法表定义在 Python 模块 `method_switches.py`，
+# 两处应保持一致：修改方法矩阵时，建议同时更新本 YAML 和 Python 表。
+
+methods:
+  # 固定融合基线：第4章 alpha_HR 固定，第3章 alpha_FP 固定。
+  balanced_fixed:
+    arbitration_strategy: fixed_blend
+    execution_strategy: fixed_05
+    fixed_alpha_hr: 0.5
+    fixed_alpha_fp: 0.5
+  # 仅参考层：启用第4章动态参考仲裁和安全投影，执行层保持固定。
+  reference_only:
+    arbitration_strategy: full_method
+    execution_strategy: fixed_05
+    fixed_alpha_hr: 0.5
+    fixed_alpha_fp: 0.5
+  # 仅执行层：参考层不接受人类修正，只验证第3章动态 alpha_FP。
+  execution_only:
+    arbitration_strategy: autonomous_only
+    execution_strategy: continuous_force_margin
+    fixed_alpha_hr: 0.0
+    fixed_alpha_fp: 0.5
+  # 完整方法：第4章动态 alpha_HR + 第3章动态 alpha_FP。
+  full_method:
+    arbitration_strategy: full_method
+    execution_strategy: continuous_force_margin
+    fixed_alpha_hr: 0.5
+    fixed_alpha_fp: 0.5
+  # 强位置优先基线：alpha_FP 偏大。
+  strong_position:
+    arbitration_strategy: fixed_blend
+    execution_strategy: fixed_08
+    fixed_alpha_hr: 0.5
+    fixed_alpha_fp: 0.8
+  # 强力优先基线：alpha_FP 偏小。
+  strong_force:
+    arbitration_strategy: fixed_blend
+    execution_strategy: fixed_02
+    fixed_alpha_hr: 0.5
+    fixed_alpha_fp: 0.2
+  # 安全投影消融：保留动态仲裁，但关闭 x_h_safe 投影。
+  no_projection:
+    arbitration_strategy: dynamic_no_projection
+    execution_strategy: continuous_force_margin
+    fixed_alpha_hr: 0.5
+    fixed_alpha_fp: 0.5
+
+score_weights:
+  # 综合分数权重。该分数只用于同任务内排序，不替代单项成功判据。
+  force_peak: 0.20
+  force_violation: 0.25
+  tracking: 0.20
+  acceptance_loss: 0.15
+  suppression_loss: 0.15
+  rcm: 0.05
+
+thresholds:
+  # 第5章统一成功判据。
+  tracking_last_rms_m: 0.003
+  tracking_last_max_m: 0.0045
+  rcm_last_rms_m: 0.003
+  force_violation_time_s: 0.20

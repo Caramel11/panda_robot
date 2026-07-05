@@ -1,0 +1,40 @@
+shared_gt_gazebo_node:
+  ros__parameters:
+    # 是否真实发布 effort 命令；调试参数解析时可改为 false。
+    enable_control: true
+    # dry_run=true 时不发布力矩，只运行逻辑和记录。
+    dry_run: false
+    # 第4章主实验使用 no_rcm；with_rcm 保留用于边界验证。
+    task_mode: no_rcm
+    # gt_kf 对应 ROS1/0213 风格的博弈增益 + 模糊/KF 仲裁。
+    controller_variant: gt_kf
+    # 默认使用完整方法：动态仲裁 + 安全投影 + 切/法向分解。
+    arbitration_strategy: full_method
+    # 默认综合工况：切向修正、短扰动、危险法向压入、持续干预。
+    scenario: mixed_sequence
+    # fixed_blend 基线使用的固定人机权重。
+    fixed_alpha_hr: 0.5
+    # Gazebo/ROS2 接口 topic。
+    state_topic: /joint_states
+    cmd_topic: /no_rcm_effort_controller/commands
+    # FR3 模型和控制使用的关键坐标系。
+    robot_type: fr3
+    tool_frame: fr3_link11
+    flange_frame: fr3_link8
+    reference_frame: fr3_link8
+    # 当前 Gazebo 空世界中默认不额外加入重力补偿。
+    gravity_compensation_scale: 0.0
+    # 使用当前关节位置作为 home 起点。
+    use_current_as_home: true
+    # 控制频率和力矩安全限制。
+    control_rate_hz: 100.0
+    max_tau_abs: [55.0, 55.0, 55.0, 55.0, 18.0, 14.0, 10.0]
+    max_tau_rate: 220.0
+    # 进入任务前的 home 保持时间。
+    home_hold_s: 1.0
+    # 单次实验时长；18-24 s 通常作为稳态评价窗口。
+    task_duration_s: 24.0
+    # 稳态跟踪误差成功阈值：理想仿真 3 mm；realistic_env_enabled=true 时自动放宽到 10 mm。
+    target_tolerance_m: 0.003
+    # 实验数据默认输出目录。
+    output_dir: /home/liu/franka_ros2_ws/results/ch4_shared_gt_gazebo

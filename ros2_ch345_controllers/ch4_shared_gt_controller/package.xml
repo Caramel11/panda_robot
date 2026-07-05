@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>ch4_shared_gt_controller</name>
+  <version>0.1.0</version>
+  <description>ROS 2 Chapter 4 shared-control arbitration Gazebo experiments cloned from shared_gt_controller.</description>
+  <maintainer email="liu@example.com">liu</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>franka_description</exec_depend>
+  <exec_depend>franka_gazebo_bringup</exec_depend>
+  <exec_depend>real_env_sim</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

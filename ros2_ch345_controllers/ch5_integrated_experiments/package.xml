@@ -1,0 +1,36 @@
+<?xml version="1.0"?>
+<package format="3">
+  <!--
+    第5章综合实验 ROS2 Python 包。
+    该包本身不实现底层 Panda 控制律，而是负责：
+    1. 调用第4章 Gazebo 控制器进行批量实验；
+    2. 计算第5章统一指标；
+    3. 生成图表、LaTeX 表格和实验报告；
+    4. 提供 Falcon 实物输入桥接和硬件话题预检。
+  -->
+  <name>ch5_integrated_experiments</name>
+  <version>0.1.0</version>
+  <description>Chapter 5 integrated experiments for Chapter 3 execution and Chapter 4 reference arbitration.</description>
+  <maintainer email="2796708472@qq.com">liu</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <!-- Python ROS2 节点运行依赖。 -->
+  <exec_depend>rclpy</exec_depend>
+  <!-- Falcon 桥接、硬件预检和外部人类输入使用的标准消息。 -->
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <!-- launch 依赖，用于启动 Falcon 桥接节点。 -->
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <!-- 第5章在线实验复用第4章 Gazebo 控制器，并与第3章实验逻辑对齐。 -->
+  <exec_depend>ch4_shared_gt_controller</exec_depend>
+  <exec_depend>ch3_experiments</exec_depend>
+  <exec_depend>real_env_sim</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

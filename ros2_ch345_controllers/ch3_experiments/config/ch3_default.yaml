@@ -1,0 +1,22 @@
+simulation:
+  dt: 0.01
+  scan_duration: 32.0
+  settle_time: 1.5
+  scan_start: [0.40, 0.00, 0.298]
+  scan_end: [0.48, 0.00, 0.298]
+  mass: 6.0
+  damping: 18.0
+force:
+  desired: 1.0
+  min: 0.66
+  max: 1.38
+surface:
+  zones:
+    - {x_min: 0.40, x_max: 0.44, stiffness: 300.0, damping: 12.0}
+    - {x_min: 0.44, x_max: 0.48, stiffness: 500.0, damping: 22.0}
+  height: 0.3013
+  force_noise_std: 0.004
+controllers:
+  list: [impedance, hybrid, fixed_02, fixed_05, fixed_08, dynamic_gt, mpc_qp]
+  repeats: 3
+  random_seed: 7

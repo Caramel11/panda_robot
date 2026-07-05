@@ -1,0 +1,12 @@
+gazebo:
+  launch_package: franka_gazebo_bringup
+  launch_file: gazebo_franka_arm_example_controller.launch.py
+  robot_type: fr3
+  controller: no_rcm_effort_controller
+  world: /home/liu/franka_ros2_ws/install/franka_gazebo_bringup/share/franka_gazebo_bringup/worlds/empty_no_gravity.sdf
+no_rcm:
+  strategies: [fixed_05]
+  controller_mode: pareto_iter
+  trials: 1
+  benchmark: default
+  output_dir: /home/liu/franka_ros2_ws/results/ch3_experiments_gazebo
